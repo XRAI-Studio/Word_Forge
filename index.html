@@ -1,0 +1,1413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Word Forge — Latin Roots</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Nunito:wght@600;700;800;900&display=swap" rel="stylesheet">
+<style>
+:root{
+  --sky:#2C4BE0;          /* electric royal blue */
+  --sky-deep:#1B2FA0;
+  --card:#203BC0;
+  --ink:#17246E;          /* tile ink */
+  --white:#FFFFFF;
+  --cloud:#DDE4FF;        /* dim text on blue */
+  --sun:#FFC93C;          /* sunshine — buttons & prefix */
+  --sun-hot:#FFB300;
+  --mint:#4ADE80;         /* correct & suffix */
+  --coral:#FF6B6B;        /* wrong */
+  --grape:#B9A6FF;        /* suffix tint */
+  --shadow:0 5px 0 rgba(10,18,70,.55);
+  --pop:0 5px 0 rgba(10,18,70,.55), 0 12px 24px rgba(10,18,70,.35);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  background:linear-gradient(170deg,var(--sky) 0%,var(--sky-deep) 100%);
+  background-attachment:fixed;
+  color:var(--white);
+  font-family:'Nunito',system-ui,sans-serif;font-weight:700;
+  min-height:100vh;
+}
+.wrap{max-width:880px;margin:0 auto;padding:24px 16px 90px}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px;flex-wrap:wrap}
+h1{font-family:'Baloo 2',sans-serif;font-weight:800;font-size:clamp(32px,6vw,48px);letter-spacing:.5px;
+   text-shadow:0 4px 0 rgba(10,18,70,.5)}
+h1 .dot{color:var(--sun)}
+.tagline{color:var(--cloud);font-size:14px;font-weight:800;background:rgba(255,255,255,.1);padding:8px 16px;border-radius:999px}
+nav{display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap}
+nav button{
+  font-family:'Baloo 2',sans-serif;font-weight:700;font-size:16px;
+  background:rgba(255,255,255,.12);color:var(--white);border:none;
+  border-radius:16px;padding:10px 20px;cursor:pointer;transition:transform .12s,background .12s;
+  box-shadow:0 4px 0 rgba(10,18,70,.4);
+}
+nav button:hover{transform:translateY(-2px);background:rgba(255,255,255,.22)}
+nav button:active{transform:translateY(2px);box-shadow:0 1px 0 rgba(10,18,70,.4)}
+nav button.active{background:var(--sun);color:var(--ink);box-shadow:0 4px 0 var(--sun-hot),0 8px 18px rgba(255,201,60,.35)}
+button:focus-visible,input:focus-visible{outline:3px solid var(--sun);outline-offset:2px}
+.scorebar{display:flex;gap:12px;align-items:center;margin-bottom:18px;font-size:14px;color:var(--cloud);flex-wrap:wrap}
+.scorebar>span{background:rgba(255,255,255,.12);border-radius:999px;padding:7px 16px;font-weight:800;display:flex;align-items:center;gap:6px}
+.scorebar b{color:var(--sun);font-size:19px;font-family:'Baloo 2'}
+.progress{flex:1;min-width:120px;height:14px;background:rgba(10,18,70,.4);border-radius:999px;overflow:hidden;box-shadow:inset 0 2px 4px rgba(0,0,0,.3)}
+.progress i{display:block;height:100%;border-radius:999px;
+  background:linear-gradient(90deg,var(--sun),var(--sun-hot));
+  box-shadow:0 0 12px rgba(255,201,60,.7);width:0%;transition:width .35s cubic-bezier(.5,1.6,.4,1)}
+.card{background:var(--card);border-radius:26px;padding:28px 22px;margin-bottom:18px;
+  box-shadow:0 8px 0 rgba(10,18,70,.45), 0 18px 40px rgba(10,18,70,.35);
+  border:3px solid rgba(255,255,255,.08)}
+.prompt-label{font-family:'Baloo 2';font-size:15px;letter-spacing:.5px;color:var(--sun);margin-bottom:10px}
+.bigword{font-family:'Baloo 2',sans-serif;font-weight:800;font-size:clamp(34px,7vw,56px);text-align:center;margin:10px 0 6px;letter-spacing:1px}
+.bigword .hl{color:var(--sun);border-bottom:5px solid var(--sun);border-radius:2px;padding-bottom:2px}
+.subtext{text-align:center;color:var(--cloud);font-size:16px;margin-bottom:6px}
+.choices{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-top:18px}
+.choice{
+  background:var(--white);color:var(--ink);border:none;
+  border-radius:16px;padding:15px;font-size:16px;font-weight:800;cursor:pointer;text-align:left;
+  font-family:'Nunito';box-shadow:var(--shadow);transition:transform .12s;
+}
+.choice:hover{transform:translateY(-3px) rotate(-.5deg)}
+.choice:active{transform:translateY(2px);box-shadow:0 1px 0 rgba(10,18,70,.55)}
+.choice.correct{background:var(--mint);color:#0B3D22;animation:snapin .4s cubic-bezier(.5,1.8,.4,1)}
+.choice.incorrect{background:var(--coral);color:#4A0F0F;animation:wobble .5s}
+.choice:disabled{cursor:default}
+@keyframes snapin{0%{transform:scale(.85)}55%{transform:scale(1.08)}100%{transform:scale(1)}}
+@keyframes wobble{0%,100%{transform:translateX(0)}20%{transform:translateX(-7px) rotate(-1deg)}40%{transform:translateX(7px) rotate(1deg)}60%{transform:translateX(-5px)}80%{transform:translateX(5px)}}
+/* ---------- snap-block building tray (signature) ---------- */
+.stick{
+  display:flex;gap:6px;justify-content:center;align-items:stretch;margin:22px 0 8px;flex-wrap:wrap;
+  padding:20px 16px;border-radius:20px;background:rgba(10,18,70,.35);
+  box-shadow:inset 0 4px 10px rgba(0,0,0,.35);
+}
+.slot{
+  min-width:118px;min-height:74px;border:3px dashed rgba(255,255,255,.4);border-radius:14px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;padding:8px 12px;
+  transition:transform .15s;
+}
+.slot .slabel{font-family:'Baloo 2';font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--cloud)}
+.slot.filled{border-style:solid;border-color:transparent;animation:snapin .35s cubic-bezier(.5,1.8,.4,1)}
+.slot.filled .sval{cursor:pointer}
+#slot-prefix.filled{background:var(--sun);color:var(--ink)}
+#slot-stem.filled{background:var(--white);color:var(--ink)}
+#slot-suffix.filled{background:var(--grape);color:var(--ink)}
+.slot.filled .slabel{color:rgba(23,36,110,.6)}
+.slot .sval{font-family:'Baloo 2';font-weight:800;font-size:26px}
+/* tiles: chunky snap-blocks, color-coded by part */
+.bank{display:flex;flex-wrap:wrap;gap:12px;justify-content:center;margin-top:18px}
+.tile{
+  border:none;border-radius:14px;
+  font-family:'Baloo 2';font-weight:800;font-size:22px;padding:12px 18px 10px;cursor:pointer;
+  box-shadow:var(--pop);transition:transform .12s;position:relative;color:var(--ink);
+}
+.tile::after{ /* snap-stud on top, like a building block */
+  content:"";position:absolute;top:-6px;left:50%;transform:translateX(-50%);
+  width:26px;height:10px;border-radius:6px 6px 0 0;background:inherit;filter:brightness(.92);
+}
+.tile-prefix{background:var(--sun)}
+.tile-stem{background:var(--white)}
+.tile-suffix{background:var(--grape)}
+.tile small{display:block;font-family:'Nunito';font-weight:800;font-size:10.5px;letter-spacing:.5px;text-transform:uppercase;color:rgba(23,36,110,.65);margin-top:2px}
+.tile:hover{transform:translateY(-4px) rotate(-1deg) scale(1.04)}
+.tile:active{transform:translateY(2px);box-shadow:0 1px 0 rgba(10,18,70,.55)}
+.tile.used{opacity:.25;pointer-events:none}
+.actions{display:flex;gap:12px;justify-content:center;margin-top:22px;flex-wrap:wrap}
+.btn{font-family:'Baloo 2';font-weight:700;font-size:17px;border-radius:16px;padding:12px 28px;cursor:pointer;border:none;transition:transform .12s}
+.btn:hover{transform:translateY(-2px)}
+.btn:active{transform:translateY(2px)}
+.btn-primary{background:var(--sun);color:var(--ink);box-shadow:0 5px 0 var(--sun-hot)}
+.btn-primary:active{box-shadow:0 1px 0 var(--sun-hot)}
+.btn-ghost{background:rgba(255,255,255,.12);color:var(--white);box-shadow:0 4px 0 rgba(10,18,70,.4)}
+.btn-ghost:active{box-shadow:0 1px 0 rgba(10,18,70,.4)}
+.feedback{text-align:center;margin-top:16px;font-size:17px;min-height:56px;font-weight:800}
+.feedback .lit{color:var(--sun);font-family:'Baloo 2';font-size:20px}
+.feedback.good{color:var(--mint)} .feedback.bad{color:#FFB3B3}
+.feedback .expl{color:var(--cloud);font-size:14.5px;margin-top:4px;display:block;font-weight:700}
+/* lexicon */
+.lex-tabs{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+.lex-tabs button{background:rgba(255,255,255,.12);border:none;color:var(--white);border-radius:12px;padding:9px 16px;font-size:14px;cursor:pointer;font-family:'Baloo 2';font-weight:700;box-shadow:0 3px 0 rgba(10,18,70,.4);transition:transform .12s}
+.lex-tabs button:hover{transform:translateY(-2px)}
+.lex-tabs button.active{background:var(--white);color:var(--ink);box-shadow:0 3px 0 rgba(10,18,70,.55)}
+.lex-search{width:100%;padding:13px 18px;border-radius:14px;border:none;background:rgba(10,18,70,.35);color:var(--white);font-size:16px;margin-bottom:14px;font-family:'Nunito';font-weight:700;box-shadow:inset 0 2px 6px rgba(0,0,0,.3)}
+.lex-search::placeholder{color:var(--cloud)}
+.lex-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}
+.lex-item{background:rgba(255,255,255,.1);border-radius:16px;padding:15px;border:2px solid rgba(255,255,255,.08)}
+.lex-item .part{font-family:'Baloo 2';font-weight:800;font-size:24px;color:var(--sun)}
+.lex-item .mean{font-size:14.5px;margin:3px 0}
+.lex-item .ex{font-size:12.5px;color:var(--cloud)}
+.done-card{text-align:center;padding:44px 20px}
+.done-card .score-big{font-family:'Baloo 2';font-weight:800;font-size:76px;color:var(--sun);text-shadow:0 5px 0 rgba(10,18,70,.5);animation:snapin .5s cubic-bezier(.5,1.8,.4,1)}
+/* sparkles */
+#sparkle-layer{position:fixed;inset:0;pointer-events:none;overflow:hidden;z-index:50}
+.spark{position:absolute;font-size:20px;animation:sparkfly .9s ease-out forwards}
+@keyframes sparkfly{
+  0%{transform:translate(0,0) scale(.6) rotate(0deg);opacity:1}
+  100%{transform:translate(var(--dx),var(--dy)) scale(1.5) rotate(var(--rot));opacity:0}
+}
+/* flashcards */
+.fc-stage{display:flex;flex-direction:column;align-items:center;gap:18px}
+.fc-count{color:var(--cloud);font-size:14px;font-weight:800}
+.flashcard{width:min(430px,90vw);height:270px;perspective:1200px;cursor:pointer;background:none;border:none;padding:0}
+.fc-inner{position:relative;width:100%;height:100%;transition:transform .5s cubic-bezier(.4,1.4,.5,1);transform-style:preserve-3d}
+.flashcard.flipped .fc-inner{transform:rotateY(180deg)}
+.fc-face{position:absolute;inset:0;backface-visibility:hidden;-webkit-backface-visibility:hidden;border-radius:22px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:24px;box-shadow:var(--pop)}
+.fc-front{background:var(--white);color:var(--ink)}
+.fc-front .fc-part{font-family:'Baloo 2';font-weight:800;font-size:54px}
+.fc-front .fc-type{font-family:'Baloo 2';font-size:12px;letter-spacing:3px;text-transform:uppercase;color:#6B5310;background:var(--sun);padding:4px 14px;border-radius:999px}
+.fc-hint{font-size:13px;color:#9AA3C9;position:absolute;bottom:16px;font-weight:800}
+.fc-back{background:var(--sky-deep);border:4px solid var(--sun);color:var(--white);transform:rotateY(180deg)}
+.fc-back .fc-part{font-family:'Baloo 2';font-weight:800;font-size:28px;color:var(--sun)}
+.fc-back .fc-mean{font-size:20px;text-align:center;font-weight:800}
+.fc-back .fc-ex{font-size:14.5px;color:var(--cloud)}
+.fc-back .fc-def{font-size:14.5px;color:var(--white);text-align:center;max-width:350px}
+.fc-back .fc-lit{font-size:13.5px;color:var(--cloud);font-style:italic}
+.fc-nav{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+/* story modal */
+.story-overlay{position:fixed;inset:0;background:rgba(10,16,60,.7);display:flex;align-items:center;justify-content:center;z-index:100;padding:16px}
+.story-card{background:var(--white);color:var(--ink);border-radius:26px;max-width:480px;width:100%;padding:30px 26px;box-shadow:0 10px 0 rgba(10,18,70,.5),0 30px 60px rgba(0,0,0,.5);animation:snapin .45s cubic-bezier(.5,1.8,.4,1);text-align:center}
+.story-card .story-badge{font-family:'Baloo 2';font-size:13px;letter-spacing:2px;text-transform:uppercase;background:var(--sun);color:#6B5310;display:inline-block;padding:5px 16px;border-radius:999px;margin-bottom:10px}
+.story-card .story-emoji{font-size:44px;margin:4px 0}
+.story-card h3{font-family:'Baloo 2';font-weight:800;font-size:24px;margin-bottom:10px}
+.story-card p{font-size:15.5px;font-weight:700;line-height:1.55;color:#2A3670;text-align:left}
+.story-card .btn{margin-top:18px}
+/* stories collection */
+.story-item{background:rgba(255,255,255,.1);border-radius:16px;padding:16px;border:2px solid rgba(255,255,255,.08);cursor:pointer;transition:transform .12s}
+.story-item:hover{transform:translateY(-2px)}
+.story-item.locked{opacity:.45;cursor:default}
+.story-item .st-title{font-family:'Baloo 2';font-weight:800;font-size:17px;color:var(--sun)}
+.story-item .st-tease{font-size:13px;color:var(--cloud);margin-top:3px}
+/* prefix family expander in lexicon */
+.lex-item.expandable{cursor:pointer;transition:transform .12s}
+.lex-item.expandable:hover{transform:translateY(-2px);border-color:var(--sun)}
+.family-panel{grid-column:1/-1;background:rgba(10,18,70,.35);border-radius:18px;padding:20px;border:2px solid var(--sun)}
+.family-panel h3{font-family:'Baloo 2';font-size:22px;color:var(--sun);margin-bottom:6px}
+.family-panel .fam-story{font-size:14.5px;line-height:1.55;color:var(--white);margin-bottom:12px}
+.family-chips{display:flex;flex-wrap:wrap;gap:8px}
+.family-chips span{background:var(--white);color:var(--ink);border-radius:999px;padding:6px 14px;font-family:'Baloo 2';font-weight:700;font-size:14px;box-shadow:0 3px 0 rgba(10,18,70,.5)}
+@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Word Forge<span class="dot">.</span></h1>
+    <div class="tagline">🧩 Snap Latin parts together. Unlock big words!</div>
+  </header>
+
+  <nav>
+    <button id="tab-forge" class="active" onclick="setMode('forge')">🔨 Forge</button>
+    <button id="tab-decode" onclick="setMode('decode')">🔍 Decode</button>
+    <button id="tab-lexicon" onclick="setMode('lexicon')">📚 Lexicon</button>
+    <button id="tab-cards" onclick="setMode('cards')">⚡ Flashcards</button>
+    <button id="tab-stories" onclick="setMode('stories')">📖 Stories <span id="story-count"></span></button>
+  </nav>
+
+  <div class="scorebar" id="scorebar">
+    <span>⭐ <b id="score">0</b></span>
+    <span>🔥 <b id="streak">0</b></span>
+    <div class="progress"><i id="prog"></i></div>
+    <span id="roundlabel">1 / 10</span>
+  </div>
+
+  <div id="stage"></div>
+<div id="sparkle-layer"></div>
+</div>
+
+<script>
+/* ============ DATA ============ */
+const PREFIXES = [
+["ab-","away from","abnormal"],
+["ad-","to, toward","adhere"],
+["ante-","before","antecedent"],
+["circum-","around","circumnavigate"],
+["con-","with, together","connect"],
+["contra-","against","contradict"],
+["de-","down, away","decelerate"],
+["dis-","apart, away","disappear"],
+["ex-","out of, from","extract"],
+["extra-","outside, beyond","extracurricular"],
+["in-","into, not","invisible"],
+["inter-","between, among","interact"],
+["intra-","within, inside","intravenous"],
+["non-","not","nonsense"],
+["per-","through, thoroughly","percolate"],
+["post-","after","postpone"],
+["pre-","before","preview"],
+["pro-","forward, in favor of","promote"],
+["sub-","under, beneath","subway"],
+["trans-","across, beyond","transport"],
+["re-","back, again","return"],
+["ob-","against, toward","object"],
+["se-","apart, aside","separate"],
+["super-","above, over","supervise"],
+["retro-","backward","retrospect"]
+];
+const SUFFIXES = [
+["-able","able to be","portable"],
+["-ible","able to be","visible"],
+["-al","relating to","verbal"],
+["-ance","state or quality of","vigilance"],
+["-ence","state or quality of","evidence"],
+["-ant","one who; being","servant"],
+["-ent","one who; being","agent"],
+["-ary","relating to; place for","library"],
+["-ate","to make; having","activate"],
+["-fy","to make","magnify"],
+["-ic","relating to","sonic"],
+["-ile","capable of; like","docile"],
+["-ion","act or state of","tension"],
+["-ity","quality of","clarity"],
+["-ive","tending to","active"],
+["-ment","result or act of","movement"],
+["-or","one who; that which","spectator"],
+["-ory","place for; relating to","laboratory"],
+["-ous","full of","famous"],
+["-ude","state of","solitude"],
+["-ure","result or process of","rupture"],
+["-an","relating to; one from","urban"],
+["-er","one who; more","porter"],
+["-age","action or result of","passage"],
+["-ism","belief or practice of","realism"]
+];
+const STEMS = [
+["aud","hear","audible"],
+["bene","good, well","benefit"],
+["brev","short","abbreviate"],
+["cap","take, seize","capture"],
+["ced","go, yield","concede"],
+["cern","separate, sift","discern"],
+["cis","cut","incision"],
+["clam","shout","exclaim"],
+["clud","close, shut","exclude"],
+["cogn","know","recognize"],
+["cred","believe","credible"],
+["curr","run","current"],
+["dict","say, speak","dictate"],
+["doc","teach","doctrine"],
+["duc","lead","conduct"],
+["dur","hard, lasting","durable"],
+["fac","make, do","factory"],
+["fer","carry, bear","transfer"],
+["fid","trust, faith","confide"],
+["fin","end, limit","final"],
+["firm","strong, steady","confirm"],
+["flect","bend","deflect"],
+["flu","flow","fluent"],
+["form","shape","formation"],
+["fort","strong","fortify"],
+["fract","break","fracture"],
+["fus","pour, melt","fusion"],
+["gen","birth, origin","generate"],
+["grad","step, go","gradual"],
+["grat","pleasing, thankful","gratitude"],
+["grav","heavy","gravity"],
+["greg","flock, gather","congregate"],
+["her","stick, cling","adhere"],
+["ject","throw","eject"],
+["jud","judge","judicial"],
+["junct","join","junction"],
+["jur","law, swear","jury"],
+["labor","work","laboratory"],
+["lect","read, choose","lecture"],
+["liber","free","liberate"],
+["loc","place","location"],
+["loqu","speak","eloquent"],
+["luc","light","translucent"],
+["lud","play","interlude"],
+["magn","great, large","magnify"],
+["mal","bad, evil","malice"],
+["man","hand","manual"],
+["mar","sea","marine"],
+["med","middle","medium"],
+["memor","remember","memorial"],
+["merg","plunge, dip","submerge"],
+["migr","move, travel","migrate"],
+["mit","send","transmit"],
+["mort","death","mortal"],
+["mot","move","motion"],
+["mut","change","mutate"],
+["nat","born","native"],
+["nav","ship","navigate"],
+["noc","harm","innocent"],
+["nomin","name","nominate"],
+["nov","new","novel"],
+["numer","number","numeral"],
+["omni","all","omnivore"],
+["oper","work","operate"],
+["ordin","order","ordinary"],
+["part","share, divide","partial"],
+["ped","foot","pedal"],
+["pel","drive, push","propel"],
+["pend","hang, weigh","suspend"],
+["plic","fold","complicate"],
+["pon","place, put","postpone"],
+["port","carry","transport"],
+["press","press","pressure"],
+["prim","first","primary"],
+["priv","separate, own","private"],
+["prob","test, prove","probe"],
+["punct","point, prick","punctual"],
+["quir","ask, seek","inquiry"],
+["rect","straight, right","direct"],
+["rupt","break, burst","interrupt"],
+["sci","know","science"],
+["scrib","write","inscribe"],
+["sect","cut","dissect"],
+["sed","sit, settle","sediment"],
+["sens","feel","sensation"],
+["sequ","follow","sequence"],
+["serv","keep, serve","conserve"],
+["sign","mark, sign","signal"],
+["simil","like, same","similar"],
+["sist","stand, stop","resist"],
+["sol","alone","solitude"],
+["solv","loosen, free","dissolve"],
+["son","sound","sonic"],
+["spec","look, watch","inspect"],
+["spir","breathe","conspire"],
+["stat","stand","station"],
+["strict","tighten, bind","constrict"],
+["struct","build","construct"],
+["tact","touch","contact"],
+["tempor","time","temporary"],
+["ten","hold","tenant"],
+["tend","stretch","extend"],
+["term","end, boundary","terminal"],
+["terr","land, earth","territory"],
+["tort","twist","contort"],
+["tract","pull, drag","tractor"],
+["trib","give, pay","tribute"],
+["trud","push, thrust","intrude"],
+["turb","stir, confuse","disturb"],
+["urb","city","urban"],
+["vac","empty","vacant"],
+["val","strong, worth","valid"],
+["ven","come","convene"],
+["ver","true","verify"],
+["verb","word","verbal"],
+["vert","turn","convert"],
+["vid","see","video"],
+["vinc","conquer","invincible"],
+["vit","life","vital"],
+["voc","call, voice","vocal"],
+["vol","wish, will","volunteer"],
+["volv","roll, turn","revolve"],
+["aqua","water","aquarium"],
+["ann","year","annual"],
+["cent","hundred","century"],
+["cord","heart","cordial"],
+["corp","body","corporal"],
+["cur","care for","curator"],
+["don","give","donate"],
+["dorm","sleep","dormant"],
+["equ","equal","equation"],
+["fug","flee","fugitive"]
+];
+
+/* Forge words: [word, prefix|null, stem, suffix|null, literal meaning, definition] */
+const WORDS = [
+["abduction","ab-","duc","-ion","lead away from","the criminal act of capturing and carrying away by force a family member"],
+["accept","ad-","cap",null,"take to","consider or hold as true"],
+["acceptable","ad-","cap","-able","take to","meeting requirements"],
+["access","ad-","ced",null,"go to","the right to enter"],
+["accessory","ad-","ced","-ory","go to","someone who helps another person commit a crime"],
+["accurate","ad-","curr","-ate","run to","conforming exactly or almost exactly to fact or to a standard or performing with total\u2026"],
+["acquire","ad-","quir",null,"ask to","take on a certain form, attribute, or aspect"],
+["addict","ad-","dict",null,"say to","someone who is physiologically dependent on a substance"],
+["addiction","ad-","dict","-ion","say to","an abnormally strong craving"],
+["admission","ad-","mit","-ion","send to","the fee charged for admission"],
+["admit","ad-","mit",null,"send to","allow to enter"],
+["adventure","ad-","ven","-ure","come to","put at risk"],
+["advise","ad-","vid",null,"see to","give advice to"],
+["advisor","ad-","vid","-or","see to","an expert who gives advice"],
+["advocate","ad-","voc","-ate","call to","push for something"],
+["affect","ad-","fac",null,"make to","act physically on"],
+["affection","ad-","fac","-ion","make to","a positive feeling of liking"],
+["affirmative","ad-","firm","-ive","strong to","expecting the best"],
+["aggression","ad-","grad","-ion","step to","a disposition to behave aggressively"],
+["aggressive","ad-","grad","-ive","step to","tending to spread quickly"],
+["application","ad-","plic","-ion","fold to","the work of applying something"],
+["apply","ad-","plic",null,"fold to","put into service"],
+["appoint","ad-","punct",null,"point to","furnish"],
+["appointment","ad-","punct","-ment","point to","a meeting arranged in advance"],
+["approval","ad-","prob","-al","test to","acceptance as satisfactory"],
+["assessment","ad-","sed","-ment","sit to","the market value set on assets"],
+["assign","ad-","sign",null,"mark to","give out"],
+["assignment","ad-","sign","-ment","mark to","the act of distributing something to designated places or persons"],
+["assist","ad-","sist",null,"stand to","give help or assistance"],
+["assistance","ad-","sist","-ance","stand to","a resource"],
+["assistant","ad-","sist","-ant","stand to","of or relating to a person who is subordinate to another"],
+["attend","ad-","tend",null,"stretch to","take charge of or deal with"],
+["attendance","ad-","tend","-ance","stretch to","the number of people that are present"],
+["attendant","ad-","tend","-ant","stretch to","a person who is present and participates in a meeting"],
+["attention","ad-","ten","-ion","hold to","a general interest that leads people to want to know more"],
+["attract","ad-","tract",null,"pull to","be attractive to"],
+["attraction","ad-","tract","-ion","pull to","the quality of arousing interest"],
+["attractive","ad-","tract","-ive","pull to","having power to arouse interest"],
+["audible",null,"aud","-ible","hear","heard or perceptible by the ear"],
+["audition",null,"aud","-ion","hear","the ability to hear"],
+["capable",null,"cap","-able","take","possibly accepting or permitting"],
+["capture",null,"cap","-ure","take","the act of forcibly dispossessing an owner of property"],
+["circumstance","circum-","stat",null,"stand around","information that should be kept in mind when making a decision"],
+["collect","con-","lect",null,"read with","get or gather together"],
+["collection","con-","lect","-ion","read with","request for a sum of money"],
+["collective","con-","lect","-ive","read with","forming a whole or aggregate"],
+["collector","con-","lect","-or","read with","a person who collects things"],
+["comfort","con-","fort",null,"strong with","the act of consoling"],
+["comfortable","con-","fort","-able","strong with","more than adequate"],
+["command","con-","man",null,"hand with","the power or authority to command"],
+["commandant","con-","man","-ant","hand with","an officer in command of a military unit"],
+["commander","con-","man","-er","hand with","an officer in command of a military unit"],
+["commission","con-","mit","-ion","send with","a special group delegated to consider some matter"],
+["commit","con-","mit",null,"send with","cause to be admitted"],
+["commitment","con-","mit","-ment","send with","the trait of sincere and steadfast fixity of purpose"],
+["commotion","con-","mot","-ion","move with","confused movement"],
+["compartment","con-","part","-ment","share with","a space into which an area is subdivided"],
+["compensate","con-","pend","-ate","hang with","adjust for"],
+["compensation","con-","pend","-ion","hang with","the act of compensating for service or loss or injury"],
+["complex","con-","plic",null,"fold with","a conceptual whole made up of complicated and related parts"],
+["comply","con-","plic",null,"fold with","act in accordance with someone's rules, commands, or wishes"],
+["concept","con-","cap",null,"take with","an abstract or general idea inferred or derived from specific instances"],
+["concern","con-","cern",null,"separate with","an anxious feeling"],
+["conclude","con-","clud",null,"close with","bring to a close"],
+["conclusion","con-","clud","-ion","close with","the temporal end"],
+["conduct","con-","duc",null,"lead with","direct the course of"],
+["conductor","con-","duc","-or","lead with","the person who leads a musical group"],
+["conference","con-","fer","-ence","carry with","a discussion among participants who have an agreed (serious) topic"],
+["confidence","con-","fid","-ence","trust with","freedom from doubt"],
+["confident","con-","fid","-ent","trust with","persuaded of"],
+["confirm","con-","firm",null,"strong with","make more firm"],
+["confirmation","con-","firm","-ion","strong with","information that confirms or verifies"],
+["confuse","con-","fus",null,"pour with","cause to feel embarrassment"],
+["confusion","con-","fus","-ion","pour with","a feeling of embarrassment that leaves you confused"],
+["congregation","con-","greg","-ion","flock with","the act of congregating"],
+["congress","con-","grad",null,"step with","a national legislative assembly"],
+["conquest","con-","quir",null,"ask with","the act of conquering"],
+["conscience","con-","sci","-ence","know with","conformity to one's own sense of right conduct"],
+["conscious","con-","sci","-ous","know with","knowing and perceiving"],
+["consent","con-","sens",null,"feel with","permission to do something"],
+["consequence","con-","sequ","-ence","follow with","having important effects or influence"],
+["conservative","con-","serv","-ive","keep with","resistant to change"],
+["consistent","con-","sist","-ent","stand with","capable of being reproduced"],
+["constant","con-","stat",null,"stand with","unvarying in nature"],
+["constitution","con-","stat","-ion","stand with","the act of forming or establishing something"],
+["construction","con-","struct","-ion","build with","the creation of a construct"],
+["contact","con-","tact",null,"touch with","close interaction"],
+["contain","con-","ten",null,"hold with","contain or hold"],
+["container","con-","ten","-er","hold with","any object that can be used to hold things (especially a large metal boxlike object of\u2026"],
+["contemporary","con-","tempor","-ary","time with","characteristic of the present"],
+["content","con-","ten",null,"hold with","what a communication that is about something is about"],
+["continent","con-","ten","-ent","hold with","the European mainland"],
+["contract","con-","tract",null,"pull with","a binding agreement between two or more persons that is enforceable by law"],
+["contractor","con-","tract","-or","pull with","(law) a party to a contract"],
+["contribution","con-","trib","-ion","give with","the part played by a person in bringing about a result"],
+["convent","con-","ven",null,"come with","a religious residence especially for nuns"],
+["convention","con-","ven","-ion","come with","a large formal assembly"],
+["conversation","con-","vert","-ion","turn with","the use of speech for informal exchange of views or ideas or information etc."],
+["convert","con-","vert",null,"turn with","change the nature, purpose, or function of something"],
+["convict","con-","vinc",null,"conquer with","find or declare guilty"],
+["conviction","con-","vinc","-ion","conquer with","an unshakable belief in something without need for proof or evidence"],
+["convince","con-","vinc",null,"conquer with","make (someone) agree, understand, or realize the truth or validity of something"],
+["cooperate","con-","oper","-ate","work with","work together on a common enterprise of project"],
+["cooperation","con-","oper","-ion","work with","joint operation or action"],
+["cooperative","con-","oper","-ive","work with","involving the joint activity of two or more"],
+["corporal",null,"corp","-al","body","possessing or existing in bodily form"],
+["corporate",null,"corp","-ate","body","of or belonging to a corporation"],
+["corporation",null,"corp","-ion","body","slang for a paunch"],
+["correct","con-","rect",null,"straight with","censure severely"],
+["correction","con-","rect","-ion","straight with","something substituted for an error"],
+["corrupt","con-","rupt",null,"break with","place under suspicion or cast doubt upon"],
+["corruption","con-","rupt","-ion","break with","in a state of progressive putrefaction"],
+["currency",null,"curr","-ence","run","general acceptance or use"],
+["current",null,"curr","-ent","run","a flow of electricity through a conductor"],
+["deception","de-","cap","-ion","take down","an illusory feat"],
+["decision","de-","cis","-ion","cut down","the act of making up your mind about something"],
+["decisive","de-","cis","-ive","cut down","unmistakable"],
+["dedicate","de-","dict","-ate","say down","inscribe or address by way of compliment"],
+["dedication","de-","dict","-ion","say down","a message that makes a pledge"],
+["defect","de-","fac",null,"make down","a failing or deficiency"],
+["define","de-","fin",null,"end down","determine the nature of"],
+["definition","de-","fin","-ion","end down","clarity of outline"],
+["demand","de-","man",null,"hand down","required activity"],
+["depart","de-","part",null,"share down","leave"],
+["department","de-","part","-ment","share down","a specialized sphere of knowledge"],
+["departure","de-","part","-ure","share down","the act of departing"],
+["depend","de-","pend",null,"hang down","have faith or confidence in"],
+["dependent","de-","pend","-ent","hang down","contingent on something else"],
+["deposit","de-","pon",null,"place down","the phenomenon of sediment or gravel accumulating"],
+["depression","de-","press","-ion","press down","a sunken or depressed geological formation"],
+["describe","de-","scrib",null,"write down","give a description of"],
+["description","de-","scrib","-ion","write down","sort or variety"],
+["deserve","de-","serv",null,"keep down","be worthy or deserving"],
+["design","de-","sign",null,"mark down","an arrangement scheme"],
+["designer","de-","sign","-er","mark down","someone who specializes in graphic design"],
+["despicable","de-","spec","-able","look down","morally reprehensible"],
+["destruction","de-","struct","-ion","build down","a final state"],
+["destructive","de-","struct","-ive","build down","causing destruction or much damage"],
+["detention","de-","ten","-ion","hold down","a state of being confined (usually for a short time)"],
+["determination","de-","term","-ion","end down","the quality of being determined to do or achieve something"],
+["difference","dis-","fer","-ence","carry apart","the quality of being unlike or dissimilar"],
+["different","dis-","fer","-ent","carry apart","differing from all others"],
+["discretion","dis-","cern","-ion","separate apart","refined taste"],
+["dismiss","dis-","mit",null,"send apart","cease to consider"],
+["disorder","dis-","ordin","-er","order apart","a disturbance of the peace or of public order"],
+["disposal","dis-","pon","-al","place apart","the power to use something or someone"],
+["dispose","dis-","pon",null,"place apart","throw or cast away"],
+["distract","dis-","tract",null,"pull apart","draw someone's attention away from something"],
+["distraction","dis-","tract","-ion","pull apart","mental turmoil"],
+["distribution","dis-","trib","-ion","give apart","the act of distributing or spreading or apportioning"],
+["disturb","dis-","turb",null,"stir apart","move deeply"],
+["disturbance","dis-","turb","-ance","stir apart","a disorderly outburst or tumult"],
+["doctor",null,"doc","-or","teach","a licensed medical practitioner"],
+["donate",null,"don","-ate","give","give to a charity or good cause"],
+["donation",null,"don","-ion","give","a voluntary gift (as of money or service or ideas) made to some worthwhile cause"],
+["donor",null,"don","-or","give","person who makes a gift of property"],
+["duration",null,"dur","-ion","hard","continuance in time"],
+["educate","ex-","duc","-ate","lead out of","give an education to"],
+["education","ex-","duc","-ion","lead out of","the activities of educating or instructing"],
+["effect","ex-","fac",null,"make out of","an outward appearance"],
+["effective","ex-","fac","-ive","make out of","able to accomplish a purpose"],
+["effort","ex-","fort",null,"strong out of","a notable achievement"],
+["elaborate","ex-","labor","-ate","work out of","add details, as to an account or idea"],
+["election","ex-","lect","-ion","read out of","the status or fact of being elected"],
+["emerge","ex-","merg",null,"plunge out of","come out of"],
+["emergency","ex-","merg","-ence","plunge out of","a brake operated by hand"],
+["emotion","ex-","mot","-ion","move out of","any strong feeling"],
+["equal",null,"equ","-al","equal","be identical or equivalent to"],
+["equation",null,"equ","-ion","equal","the act of regarding as equal"],
+["estate","ex-","stat",null,"stand out of","everything you own"],
+["evacuate","ex-","vac","-ate","empty out of","empty completely"],
+["evacuation","ex-","vac","-ion","empty out of","the act of evacuating"],
+["evaluation","ex-","val","-ion","strong out of","an appraisal of the value of something"],
+["event","ex-","ven",null,"come out of","a special set of circumstances"],
+["evidence","ex-","vid","-ence","see out of","your basis for belief or disbelief"],
+["evolution","ex-","volv","-ion","roll out of","a process in which something passes by degrees to a different stage (especially a more\u2026"],
+["evolve","ex-","volv",null,"roll out of","work out"],
+["except","ex-","cap",null,"take out of","take exception to"],
+["exception","ex-","cap","-ion","take out of","a deliberate act of omission"],
+["excess","ex-","ced",null,"go out of","the state of being more than full"],
+["excessive","ex-","ced","-ive","go out of","beyond normal limits"],
+["exclusive","ex-","clud","-ive","close out of","excluding much or all"],
+["expedition","ex-","ped","-ion","foot out of","a journey organized for a particular purpose"],
+["expense","ex-","pend",null,"hang out of","a detriment or sacrifice"],
+["expensive","ex-","pend","-ive","hang out of","high in price or charging high prices"],
+["expose","ex-","pon",null,"place out of","the exposure of an impostor or a fraud"],
+["exposure","ex-","pon","-ure","place out of","vulnerability to the elements"],
+["express","ex-","press",null,"press out of","rapid transport of goods"],
+["expression","ex-","press","-ion","press out of","expression without words"],
+["extend","ex-","tend",null,"stretch out of","extend in scope or range or area"],
+["extension","ex-","ten","-ion","hold out of","act of expanding in scope"],
+["extensive","ex-","ten","-ive","hold out of","of agriculture"],
+["extent","ex-","ten",null,"hold out of","the point or degree to which something extends"],
+["extortion","ex-","tort","-ion","twist out of","an exorbitant charge"],
+["extract","ex-","tract",null,"pull out of","a passage selected from a larger work"],
+["extraordinary","extra-","ordin","-ary","order outside","far more than usual or expected"],
+["factor",null,"fac","-or","make","an abstract part of something"],
+["factory",null,"fac","-ory","make","a plant consisting of one or more buildings with facilities for manufacturing"],
+["final",null,"fin","-al","end","occurring at or forming an end or termination"],
+["finance",null,"fin","-ance","end","the commercial activity of providing funds and capital"],
+["flexible",null,"flect","-ible","bend","able to flex"],
+["formal",null,"form","-al","shape","a gown for evening wear"],
+["formation",null,"form","-ion","shape","the act of forming or establishing something"],
+["fracture",null,"fract","-ure","break","the act of cracking something"],
+["fragile",null,"fract","-ile","break","vulnerably delicate"],
+["fugitive",null,"fug","-ive","flee","lasting for a markedly brief time"],
+["fusion",null,"fus","-ion","pour","the state of being combined into one body"],
+["general",null,"gen","-al","birth","a general officer of the highest rank"],
+["generate",null,"gen","-ate","birth","give or supply"],
+["generation",null,"gen","-ion","birth","the normal time between successive generations"],
+["generator",null,"gen","-or","birth","an apparatus that produces a vapor or gas"],
+["generous",null,"gen","-ous","birth","more than adequate"],
+["gratitude",null,"grat","-ude","pleasing","a feeling of thankfulness and appreciation"],
+["gravity",null,"grav","-ity","heavy","a solemn and dignified feeling"],
+["illusion","in-","lud","-ion","play into","the act of deluding"],
+["immediate","in-","med","-ate","middle into","having no intervening medium"],
+["immigration","in-","migr","-ion","move into","the body of immigrants arriving during a specified interval"],
+["immortal","in-","mort","-al","not death","not subject to death"],
+["importance","in-","port","-ance","carry into","a prominent status"],
+["important","in-","port","-ant","carry into","of extreme importance"],
+["impress","in-","press",null,"press into","impress positively"],
+["impression","in-","press","-ion","press into","an outward appearance"],
+["impressive","in-","press","-ive","press into","producing a strong effect"],
+["impulse","in-","pel",null,"drive into","a sudden desire"],
+["impulsive","in-","pel","-ive","not drive","without forethought"],
+["inaudible","in-","aud","-ible","not hear","impossible to hear"],
+["incapable","in-","cap","-able","not take","(followed by `of') lacking capacity or ability"],
+["include","in-","clud",null,"close into","consider as part of something"],
+["incredible","in-","cred","-ible","believe into","beyond belief or understanding"],
+["indicate","in-","dict","-ate","say into","to state or express briefly"],
+["indication","in-","dict","-ion","say into","something that serves to indicate or suggest"],
+["infection","in-","fac","-ion","make into","(phonetics) the alteration of a speech sound under the influence of a neighboring sound"],
+["infirmary","in-","firm","-ary","strong into","a health facility where patients receive treatment"],
+["influence","in-","flu","-ence","not flow","causing something without any direct or apparent effort"],
+["inform","in-","form",null,"shape into","act as an informer"],
+["informant","in-","form","-ant","shape into","a person who supplies information"],
+["information","in-","form","-ion","shape into","formal accusation of a crime"],
+["inject","in-","ject",null,"throw into","give an injection to"],
+["injection","in-","ject","-ion","throw into","any solution that is injected (as into the skin)"],
+["innocence","in-","noc","-ence","harm into","the quality of innocent naivete"],
+["innocent","in-","noc","-ent","harm into","free from evil or guilt"],
+["insect","in-","sect",null,"cut into","small air-breathing arthropod"],
+["insensitive","in-","sens","-ive","feel into","deficient in human sensibility"],
+["insist","in-","sist",null,"stand into","assert to be true"],
+["inspect","in-","spec",null,"look into","look over carefully"],
+["inspection","in-","spec","-ion","look into","a formal or official examination"],
+["inspector","in-","spec","-or","look into","a high ranking police officer"],
+["inspiration","in-","spir","-ion","breathe into","a product of your creative thinking and work"],
+["inspire","in-","spir",null,"breathe into","heighten or intensify"],
+["instance","in-","stat",null,"stand into","an occurrence of something"],
+["instant","in-","stat",null,"stand into","occurring with no delay"],
+["institution","in-","stat","-ion","stand into","an organization founded and united for a specific purpose"],
+["instruction","in-","struct","-ion","build into","the profession of a teacher"],
+["instructor","in-","struct","-or","build into","a person whose occupation is teaching"],
+["intact","in-","tact",null,"touch into","constituting the undiminished entirety"],
+["intend","in-","tend",null,"stretch into","design or destine"],
+["intense","in-","tend",null,"stretch into","extremely sharp or intense"],
+["intensity","in-","tend","-ity","stretch into","high level or degree"],
+["intent","in-","ten",null,"hold into","the intended meaning of a communication"],
+["intention","in-","ten","-ion","hold into","an act of intending"],
+["intercept","inter-","cap",null,"take between","seize on its way"],
+["intercourse","inter-","curr",null,"run between","communication between individuals"],
+["interference","inter-","fer","-ence","carry between","the act of hindering or obstructing or impeding"],
+["interrupt","inter-","rupt",null,"break between","make a break in"],
+["intervene","inter-","ven",null,"come between","occur between other event or between certain points of time"],
+["intervention","inter-","ven","-ion","come between","the act of intervening (as to mediate a dispute, etc.)"],
+["intruder","in-","trud","-er","not push","someone who intrudes on the privacy or property of another without permission"],
+["invent","in-","ven",null,"come into","make up something artificial or untrue"],
+["invention","in-","ven","-ion","come into","the act of inventing"],
+["inventory","in-","ven","-ory","come into","the merchandise that a shop has on hand"],
+["invincible","in-","vinc","-ible","not conquer","incapable of being overcome or subdued"],
+["invisible","in-","vid","-ible","not see","not prominent or readily noticeable"],
+["involve","in-","volv",null,"roll into","engage as a participant"],
+["involvement","in-","volv","-ment","roll into","a connection of inclusion or containment"],
+["junction",null,"junct","-ion","join","the state of being joined together"],
+["laboratory",null,"labor","-ory","work","a workplace for the conduct of scientific research"],
+["lecture",null,"lect","-ure","read","a lengthy rebuke"],
+["liberal",null,"liber","-al","free","showing or characterized by broad-mindedness"],
+["liberation",null,"liber","-ion","free","the act of liberating someone or something"],
+["local",null,"loc","-al","place","anesthetic that numbs a particular area of the body"],
+["locate",null,"loc","-ate","place","assign a location to"],
+["location",null,"loc","-ion","place","a point or extent in space"],
+["mandatory",null,"man","-ory","hand","required by rule"],
+["manual",null,"man","-al","hand","a small handbook"],
+["memorable",null,"memor","-able","remember","worth remembering"],
+["missile",null,"mit","-ile","send","a rocket carrying a warhead of conventional or nuclear explosives"],
+["mission",null,"mit","-ion","send","an operation that is assigned by a higher headquarters"],
+["mobile",null,"mot","-ile","move","a river in southwestern Alabama"],
+["mortal",null,"mort","-al","death","a human being"],
+["motion",null,"mot","-ion","move","a change of position that does not entail a change of location"],
+["motive",null,"mot","-ive","move","a theme that is repeated or elaborated in a piece of music"],
+["motor",null,"mot","-or","move","travel or be transported in a vehicle"],
+["movement",null,"mot","-ment","move","the act of changing location from one place to another"],
+["mutant",null,"mut","-ant","change","an animal that has undergone mutation"],
+["nation",null,"nat","-ion","born","the people who live in a nation or country"],
+["native",null,"nat","-ive","born","indigenous plants and animals"],
+["nature",null,"nat","-ure","born","a causal agent creating and controlling things in the universe"],
+["naval",null,"nav","-al","ship","connected with or belonging to or used in a navy"],
+["nonsense","non-","sens",null,"feel not","having no intelligible meaning"],
+["numerous",null,"numer","-ous","number","amounting to a large indefinite number"],
+["object","ob-","ject",null,"throw against","a tangible and visible entity"],
+["objection","ob-","ject","-ion","throw against","the act of protesting"],
+["objective","ob-","ject","-ive","throw against","undistorted by emotion or personal bias"],
+["observation","ob-","serv","-ion","keep against","the act of observing"],
+["observe","ob-","serv",null,"keep against","make mention of"],
+["obsession","ob-","sed","-ion","sit against","an unhealthy and compulsive preoccupation with something or someone"],
+["obtain","ob-","ten",null,"hold against","come into possession of"],
+["occupation","ob-","cap","-ion","take against","any activity that occupies a person's attention"],
+["occur","ob-","curr",null,"run against","come to pass"],
+["offer","ob-","fer",null,"carry against","a usually brief attempt"],
+["operate",null,"oper","-ate","work","direct or control"],
+["operation",null,"oper","-ion","work","a business especially one run on a large scale"],
+["operative",null,"oper","-ive","work","being in force or having or exerting force"],
+["operator",null,"oper","-or","work","someone who owns or operates a business"],
+["opponent","ob-","pon","-ent","place against","someone who offers opposition"],
+["oppose","ob-","pon",null,"place against","be against"],
+["opposition","ob-","pon","-ion","place against","the relation between opposed entities"],
+["order",null,"ordin","-er","order","a degree in a continuum of size or quantity"],
+["ordinary",null,"ordin","-ary","order","a judge of a probate court"],
+["pedal",null,"ped","-al","foot","ride a bicycle"],
+["pension",null,"pend","-ion","hang","grant a pension to"],
+["percent","per-","cent",null,"hundred through","a proportion in relation to a whole (which is usually the amount per hundred)"],
+["percentage","per-","cent","-age","hundred through","a proportion in relation to a whole (which is usually the amount per hundred)"],
+["perception","per-","cap","-ion","take through","the process of perceiving"],
+["perfect","per-","fac",null,"make through","make perfect or complete"],
+["perfection","per-","fac","-ion","make through","an ideal instance"],
+["perform","per-","form",null,"shape through","perform a function"],
+["performance","per-","form","-ance","shape through","the act of performing"],
+["performer","per-","form","-er","shape through","an entertainer who performs a dramatic or musical work for an audience"],
+["permission","per-","mit","-ion","send through","approval to do something"],
+["permit","per-","mit",null,"send through","large game fish"],
+["persistent","per-","sist","-ent","stand through","retained"],
+["perspective","per-","spec","-ive","look through","a way of regarding situations or topics etc."],
+["pervert","per-","vert",null,"turn through","practice sophistry"],
+["portable",null,"port","-able","carry","a small light typewriter"],
+["porter",null,"port","-er","carry","someone who guards an entrance"],
+["position",null,"pon","-ion","place","a way of regarding situations or topics etc."],
+["positive",null,"pon","-ive","place","the primary form of an adjective or adverb"],
+["postpone","post-","pon",null,"place after","hold back to a later time"],
+["precise","pre-","cis",null,"cut before","sharply exact or accurate or delimited"],
+["precision","pre-","cis","-ion","cut before","the quality of being reproducible in amount or performance"],
+["predict","pre-","dict",null,"say before","indicate by signs"],
+["predictable","pre-","dict","-able","say before","capable of being foretold"],
+["prefer","pre-","fer",null,"carry before","like better"],
+["prescription","pre-","scrib","-ion","write before","directions prescribed beforehand"],
+["preserve","pre-","serv",null,"keep before","fruit preserved by cooking with sugar"],
+["president","pre-","sed","-ent","sit before","the chief executive of a republic"],
+["pressure",null,"press","-ure","press","the act of pressing"],
+["pretend","pre-","tend",null,"stretch before","the enactment of a pretense"],
+["prevent","pre-","ven",null,"come before","keep from happening or arising"],
+["primary",null,"prim","-ary","first","a preliminary election where delegates or nominees are chosen"],
+["primitive",null,"prim","-ive","first","a person who belongs to an early stage of civilization"],
+["private",null,"priv","-ate","separate","concerning things deeply private and personal"],
+["probable",null,"prob","-able","test","apparently destined"],
+["probation",null,"prob","-ion","test","(law) a way of dealing with offenders without imprisoning them"],
+["procedure","pro-","ced","-ure","go forward","a set sequence of steps, part of larger computer program"],
+["proceed","pro-","ced",null,"go forward","move ahead"],
+["process","pro-","ced",null,"go forward","a writ issued by authority of law"],
+["procession","pro-","ced","-ion","go forward","the act of moving forward (as toward a goal)"],
+["produce","pro-","duc",null,"lead forward","bring forth or yield"],
+["producer","pro-","duc","-er","lead forward","something that produces"],
+["product","pro-","duc",null,"lead forward","commodities offered for sale"],
+["production","pro-","duc","-ion","lead forward","the act or process of producing something"],
+["productive","pro-","duc","-ive","lead forward","yielding positive results"],
+["progress","pro-","grad",null,"step forward","a movement forward"],
+["project","pro-","ject",null,"throw forward","communicate vividly"],
+["promise","pro-","mit",null,"send forward","make a promise or commitment"],
+["promote","pro-","mot",null,"move forward","make publicity for"],
+["promotion","pro-","mot","-ion","move forward","act of raising in rank or position"],
+["proposal","pro-","pon","-al","place forward","an offer of marriage"],
+["propose","pro-","pon",null,"place forward","propose or intend"],
+["proposition","pro-","pon","-ion","place forward","a proposal offered for acceptance or rejection"],
+["prosecution","pro-","sequ","-ion","follow forward","the continuance of something begun with a view to its completion"],
+["prosecutor","pro-","sequ","-or","follow forward","a government official who conducts criminal prosecutions on behalf of the state"],
+["prospect","pro-","spec",null,"look forward","the possibility of future success"],
+["provide","pro-","vid",null,"see forward","give something useful or necessary to"],
+["providence","pro-","vid","-ence","see forward","the capital and largest city of Rhode Island"],
+["provoke","pro-","voc",null,"call forward","provide the needed stimulus for"],
+["question",null,"quir","-ion","ask","an instance of questioning"],
+["receipt","re-","cap",null,"take back","the act of receiving"],
+["receiver","re-","cap","-er","take back","set that receives radio or tv signals"],
+["reception","re-","cap","-ion","take back","a formal party of people"],
+["recess","re-","ced",null,"go back","a small concavity"],
+["recognition","re-","cogn","-ion","know back","approval"],
+["record","re-","cord",null,"heart back","the number of wins versus losses and ties a team has had"],
+["recorder","re-","cord","-er","heart back","equipment for making records"],
+["reduce","re-","duc",null,"lead back","cut down on"],
+["refer","re-","fer",null,"carry back","be relevant to"],
+["reference","re-","fer","-ence","carry back","an indicator that orients you generally"],
+["reflect","re-","flect",null,"bend back","manifest or bring back"],
+["reflection","re-","flect","-ion","bend back","expression without words"],
+["reform","re-","form",null,"shape back","a campaign aimed to correct abuses or malpractices"],
+["refuge","re-","fug",null,"flee back","a safe place"],
+["refuse","re-","fus",null,"pour back","refuse to accept"],
+["regent",null,"rect","-ent","straight","members of a governing board"],
+["region",null,"rect","-ion","straight","the extended spatial location of something"],
+["reject","re-","ject",null,"throw back","refuse to accept"],
+["rejection","re-","ject","-ion","throw back","the state of being rejected"],
+["remote","re-","mot",null,"move back","very unlikely"],
+["removal","re-","mot","-al","move back","the act of removing"],
+["remove","re-","mot",null,"move back","remove from a position or an office"],
+["reply","re-","plic",null,"fold back","react verbally"],
+["report","re-","port",null,"carry back","a short account of the news"],
+["reporter","re-","port","-er","carry back","a person who investigates and reports or edits news stories"],
+["request","re-","quir",null,"ask back","the verbal act of requesting"],
+["require","re-","quir",null,"ask back","consider obligatory"],
+["resemblance","re-","simil","-ance","like back","similarity in appearance or external or superficial details"],
+["resent","re-","sens",null,"feel back","wish ill or allow unwillingly"],
+["reservation","re-","serv","-ion","keep back","a statement that limits or restricts some claim"],
+["reserve","re-","serv",null,"keep back","formality and propriety of manner"],
+["residence","re-","sed","-ence","sit back","the act of dwelling in a place"],
+["resident","re-","sed","-ent","sit back","living in a particular place"],
+["resign","re-","sign",null,"mark back","part with a possession or right"],
+["resignation","re-","sign","-ion","mark back","acceptance of despair"],
+["resist","re-","sist",null,"stand back","elude, especially in a baffling way"],
+["resistance","re-","sist","-ance","stand back","a material's opposition to the flow of electric current"],
+["resolution","re-","solv","-ion","loosen back","the trait of being resolute"],
+["resolve","re-","solv",null,"loosen back","bring to an end"],
+["respect","re-","spec",null,"look back","an attitude of admiration or esteem"],
+["respectable","re-","spec","-able","look back","deserving of esteem and respect"],
+["reverse","re-","vert",null,"turn back","a relation of direct opposition"],
+["revive","re-","vit",null,"life back","give new life or energy to"],
+["revolution","re-","volv","-ion","roll back","a single complete turn (axial or orbital)"],
+["revolver","re-","volv","-er","roll back","a pistol with a revolving cylinder (usually having six chambers for bullets)"],
+["science",null,"sci","-ence","know","a particular branch of scientific knowledge"],
+["secret","se-","cern",null,"separate apart","information known only to a special group"],
+["secretary","se-","cern","-ary","separate apart","a person to whom a secret is entrusted"],
+["section",null,"sect","-ion","cut","a self-contained part of a larger composition (written or musical)"],
+["sector",null,"sect","-or","cut","a particular aspect of life or activity"],
+["security","se-","curr","-ity","run apart","freedom from anxiety or fear"],
+["sedative",null,"sed","-ive","sit","tending to soothe or tranquilize"],
+["seduce","se-","duc",null,"lead apart","induce to have sex"],
+["select","se-","lect",null,"read apart","of superior grade"],
+["selection","se-","lect","-ion","read apart","the act of choosing or selecting"],
+["sensation",null,"sens","-ion","feel","someone who is dazzlingly skilled in any field"],
+["sensible",null,"sens","-ible","feel","able to feel or perceive"],
+["sensitive",null,"sens","-ive","feel","responsive to physical stimuli"],
+["sensor",null,"sens","-or","feel","any device that receives a signal or stimulus (as heat or pressure or light or motion e\u2026"],
+["sentence",null,"sens","-ence","feel","the period of time a prisoner is imprisoned"],
+["sequence",null,"sequ","-ence","follow","a following of one thing after another in time"],
+["servant",null,"serv","-ant","keep","in a subordinate position"],
+["server",null,"serv","-er","keep","(court games) the player who serves to start a point"],
+["session",null,"sed","-ion","sit","a meeting devoted to a particular activity"],
+["signal",null,"sign","-al","mark","any incitement to action"],
+["signature",null,"sign","-ure","mark","a distinguishing style"],
+["solitude",null,"sol","-ude","alone","a solitary place"],
+["solution",null,"solv","-ion","loosen","a method for solving a problem"],
+["sonic",null,"son","-ic","sound","relating to audible sound"],
+["statement",null,"stat","-ment","stand","a message that is stated or declared"],
+["static",null,"stat","-ic","stand","angry criticism"],
+["station",null,"stat","-ion","stand","proper or designated social situation"],
+["structure",null,"struct","-ure","build","a thing constructed"],
+["subject","sub-","ject",null,"throw under","a branch of knowledge"],
+["submit","sub-","mit",null,"send under","put before"],
+["substance","sub-","stat",null,"stand under","the idea that is intended"],
+["succeed","sub-","ced",null,"go under","be the successor (of)"],
+["success","sub-","ced",null,"go under","a state of prosperity or fame"],
+["successor","sub-","ced","-or","go under","a person who follows next in order"],
+["suffer","sub-","fer",null,"carry under","undergo or be subjected to"],
+["suitable",null,"sequ","-able","follow","meant or adapted for an occasion or use"],
+["supervision","super-","vid","-ion","see above","management by overseeing the performance or operation of a person or group"],
+["supervisor","super-","vid","-or","see above","one who supervises or has charge and direction of"],
+["supply","sub-","plic",null,"fold under","offering goods and services for sale"],
+["support","sub-","port",null,"carry under","aiding the cause or policy or interests of"],
+["supportive","sub-","port","-ive","carry under","furnishing support or assistance"],
+["suppose","sub-","pon",null,"place under","express a supposition"],
+["suspension","sub-","pend","-ion","hang under","temporary cessation or suspension"],
+["sustain","sub-","ten",null,"hold under","provide with nourishment"],
+["temporary",null,"tempor","-ary","time","not permanent"],
+["tenant",null,"ten","-ant","hold","any occupant who dwells in a place"],
+["tendency",null,"tend","-ence","stretch","an inclination to do something"],
+["tension",null,"ten","-ion","hold","the physical condition of being stretched or strained"],
+["terminal",null,"term","-al","end","either extremity of something that has length"],
+["torture",null,"tort","-ure","twist","extreme mental distress"],
+["tractor",null,"tract","-or","pull","a truck that has a cab but no body"],
+["transcript","trans-","scrib",null,"write across","something that has been transcribed"],
+["transfer","trans-","fer",null,"carry across","the act of moving something from one location to another"],
+["transform","trans-","form",null,"shape across","change in outward structure or looks"],
+["transformation","trans-","form","-ion","shape across","a qualitative change"],
+["transmission","trans-","mit","-ion","send across","the act of sending a message"],
+["transmit","trans-","mit",null,"send across","transfer to another"],
+["transmitter","trans-","mit","-er","send across","someone who transmits a message"],
+["transport","trans-","port",null,"carry across","something that serves as a means of transportation"],
+["transportation","trans-","port","-ion","carry across","the sum charged for riding in a public conveyance"],
+["transporter","trans-","port","-er","carry across","a long truck for carrying motor vehicles"],
+["tribal",null,"trib","-al","give","relating to or characteristic of a tribe"],
+["urban",null,"urb","-an","city","located in or characteristic of a city or city life"],
+["vacant",null,"vac","-ant","empty","void of thought or knowledge"],
+["vacation",null,"vac","-ion","empty","spend or take a vacation"],
+["valuable",null,"val","-able","strong","something of value"],
+["venture",null,"ven","-ure","come","an investment that is very risky but could yield great profits"],
+["verify",null,"ver","-fy","true","confirm the truth of"],
+["version",null,"ver","-ion","true","an interpretation of a matter from a particular viewpoint"],
+["victor",null,"vinc","-or","conquer","the contestant who wins the contest"],
+["victory",null,"vinc","-ory","conquer","a successful ending of a struggle or contest"],
+["visible",null,"vid","-ible","see","obvious to the eye"],
+["vision",null,"vid","-ion","see","the ability to see"],
+["visitor",null,"vid","-or","see","someone who visits"],
+["vital",null,"vit","-al","life","full of spirit"],
+["vocal",null,"voc","-al","call","a short musical composition with words"]
+];
+
+/* ============ SOUND & SPARKLES ============ */
+let AC=null;
+function ac(){ if(!AC){ try{AC=new (window.AudioContext||window.webkitAudioContext)();}catch(e){} } return AC; }
+function tone(freq,start,dur,type="sine",vol=0.18){
+  const c=ac(); if(!c)return;
+  const o=c.createOscillator(),g=c.createGain();
+  o.type=type;o.frequency.setValueAtTime(freq,c.currentTime+start);
+  g.gain.setValueAtTime(0,c.currentTime+start);
+  g.gain.linearRampToValueAtTime(vol,c.currentTime+start+0.02);
+  g.gain.exponentialRampToValueAtTime(0.001,c.currentTime+start+dur);
+  o.connect(g);g.connect(c.destination);
+  o.start(c.currentTime+start);o.stop(c.currentTime+start+dur+0.05);
+}
+function sndFlip(){ // quick whoosh: pitch sweep
+  const c=ac(); if(!c)return;
+  const o=c.createOscillator(),g=c.createGain();
+  o.type="triangle";
+  o.frequency.setValueAtTime(280,c.currentTime);
+  o.frequency.exponentialRampToValueAtTime(720,c.currentTime+0.16);
+  g.gain.setValueAtTime(0.12,c.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001,c.currentTime+0.2);
+  o.connect(g);g.connect(c.destination);o.start();o.stop(c.currentTime+0.25);
+}
+function sndCorrect(){ // bright major arpeggio
+  tone(523.25,0,   .25,"sine",.16);
+  tone(659.25,.09, .25,"sine",.16);
+  tone(783.99,.18, .3, "sine",.16);
+  tone(1046.5,.27, .4, "sine",.14);
+}
+function sndWrong(){ // warm, gentle "try again" — soft rising two-note nudge
+  tone(392,0,  .28,"sine",.12);
+  tone(440,.2, .34,"sine",.12);
+}
+function sparkleBurst(x,y,n=26){
+  const layer=$("sparkle-layer");
+  const glyphs=["✦","✧","✨","★","·"];
+  for(let i=0;i<n;i++){
+    const sp=document.createElement("span");
+    sp.className="spark";
+    sp.textContent=glyphs[Math.floor(Math.random()*glyphs.length)];
+    const ang=Math.random()*Math.PI*2, dist=60+Math.random()*140;
+    sp.style.left=x+"px"; sp.style.top=y+"px";
+    sp.style.color=Math.random()<.6?"var(--brass-soft)":"#FFFFFF";
+    sp.style.setProperty("--dx",Math.cos(ang)*dist+"px");
+    sp.style.setProperty("--dy",(Math.sin(ang)*dist-40)+"px");
+    sp.style.setProperty("--rot",(Math.random()*360-180)+"deg");
+    layer.appendChild(sp);
+    setTimeout(()=>sp.remove(),950);
+  }
+}
+function celebrateAt(el){
+  const r=el.getBoundingClientRect();
+  sparkleBurst(r.left+r.width/2, r.top+r.height/2);
+}
+
+/* ============ STORY TIME (unlocked at milestones) ============ */
+const STORIES=[
+["🕯️","The Secret Inside \u201cAddict\u201d","In ancient Rome, if you couldn\u2019t pay your debts, a judge would literally \u201csay you over\u201d (ad- + dict = \u201csay to\u201d) to the person you owed \u2014 and you became their servant! Today an \u201caddict\u201d is someone handed over to a different kind of master: a habit they can\u2019t escape."],
+["🏰","\u201cObsession\u201d Means a Siege!","Obsession comes from ob- (against) + sed (sit): \u201cto sit against.\u201d Roman armies would sit against a city\u2019s walls for months until it gave up \u2014 a siege! When a thought won\u2019t leave you alone, it\u2019s laying siege to your brain."],
+["🌬️","Inspiration Is a Breath","Inspiration = in- (into) + spir (breathe): \u201cto breathe into.\u201d Ancient people believed great ideas were literally blown into an artist\u2019s lungs by the gods. When you feel inspired, imagine an idea being breathed right into you!"],
+["💓","Emotions Move OUT of You","Emotion = ex- (out of) + mot (move): \u201cmoving out.\u201d People once thought feelings were spirits physically moving out of your body \u2014 which is why strong feelings still seem to burst out of us today."],
+["🥤","\u201cConfused\u201d? You\u2019ve Been Poured Together","Confuse = con- (together) + fus (pour). Picture two different drinks poured into one cup \u2014 a murky mix where you can\u2019t tell what\u2019s what. That swirled-up mess is exactly what a confused brain feels like!"],
+["🤼","Distracted = Pulled Apart","Distract = dis- (apart) + tract (pull). The Romans pictured a person\u2019s attention being physically yanked in two directions at once. Next time you\u2019re distracted, you\u2019re literally being pulled apart!"],
+["⚔️","To Convince Is to Conquer","Convince and conviction come from vinc \u2014 conquer, the same root as \u201cvictory\u201d! To convince someone is to conquer them in an argument, and a conviction is a belief that has conquered every doubt in your mind."],
+["👑","The President Just... Sits","President = pre- (before) + sed (sit) + -ent: \u201cthe one who sits before.\u201d The most powerful title in the country literally means the person with the front-row seat at the meeting!"],
+["🧻","Extortion Is a Twist","Extortion = ex- (out of) + tort (twist) \u2014 the same tort as in \u201ccontort\u201d! It paints a picture of wringing money out of someone like twisting water out of a wet towel."],
+["🐍","The Goddess of Hand-Washing","The Greek god of medicine, Asclepius, had a daughter named Hygieia \u2014 goddess of health and cleanliness. Her name slowly turned into our word hygiene. Every time you wash your hands, you\u2019re honoring a goddess!"],
+["🏥","Doctors Who Named Our Thinking","Ancient Rome had rival teams of doctors: the Empiricists trusted only experiments (giving us empirical), the Methodists loved strict procedures (methodical!), and the Dogmatics refused to change their minds \u2014 which is why stubborn thinking is still called dogmatic."],
+["🌾","Why Is England Called England?","The Angles were a tribe from flat, grassy river lands \u2014 their name comes from eng, meaning \u201cmeadow.\u201d When they settled in Britain, it became Angle-land \u2192 England: literally \u201cthe land of the meadow people.\u201d"],
+["🛡️","Why Poems Have \u201cFeet\u201d","Ancient warriors recited poems while dancing and banging swords on shields to keep the rhythm \u2014 their stomping feet kept the beat. That\u2019s why a unit of poetry is still called a foot, and why we \u201cbeat\u201d time in music!"],
+["⚒️","How Smiths Got Their Name","Long ago people had no last names \u2014 you were \u201cJohn the black\u201d or \u201cThomas the strong.\u201d Later, jobs became names: John the smith, David the tailor. The jobs disappeared, but the names stuck to their kids forever. Know anyone named Smith?"],
+["🗓️","Postpone: Time Is a Path","Postpone = post- (after) + pon (place): \u201cplace after.\u201d Ancient people imagined time as a road, and delaying something meant picking it up and setting it farther down the path. You still \u201cpush back\u201d a meeting the same way!"],
+["✋","Command: Hand It Over","Command = con- (with) + man (hand) \u2014 the same man as in \u201cmanual.\u201d Real authority meant getting your hands on the situation. To take command is literally to take it in hand!"],
+["🎯","Accurate Means \u201cRuns Right to It\u201d","Accurate combines ad- (to) + curr (run): something so precise it runs straight to the target without missing. An accurate answer sprints to the bullseye!"],
+["📦","Conclude: Close the Box","Conclude = con- (together) + clud (close/shut). Finishing an argument or story was pictured as shutting a box or closing a door. When you conclude an essay, you\u2019re closing the lid on it!"]
+];
+let storiesUnlocked=0, correctTotal=0;
+function updateStoryCount(){ $("story-count").textContent = storiesUnlocked?("("+storiesUnlocked+")"):""; }
+function maybeUnlockStory(){
+  correctTotal++;
+  if(correctTotal%3===0 && storiesUnlocked<STORIES.length){
+    storiesUnlocked++;
+    updateStoryCount();
+    setTimeout(()=>showStoryModal(storiesUnlocked-1,true),900);
+  }
+}
+function showStoryModal(i,isNew){
+  const st=STORIES[i];
+  const ov=document.createElement("div");
+  ov.className="story-overlay";
+  ov.innerHTML=`<div class="story-card">
+    <div class="story-badge">${isNew?"\u{1F513} New story unlocked!":"\u{1F4D6} Story time"}</div>
+    <div class="story-emoji">${st[0]}</div>
+    <h3>${st[1]}</h3>
+    <p>${st[2]}</p>
+    <button class="btn btn-primary" onclick="this.closest('.story-overlay').remove()">Awesome! Keep playing \u{1F680}</button>
+  </div>`;
+  ov.addEventListener("click",e=>{if(e.target===ov)ov.remove();});
+  document.body.appendChild(ov);
+  if(isNew){ sndCorrect(); const r=ov.querySelector(".story-card").getBoundingClientRect(); setTimeout(()=>sparkleBurst(window.innerWidth/2,window.innerHeight/3,20),150); }
+}
+function renderStories(){
+  $("stage").innerHTML=`
+    <div class="card">
+      <div class="prompt-label">\u{1F4D6} Story Time \u00b7 Unlock a new word-history story every 3 correct answers!</div>
+      <div class="lex-grid">${STORIES.map((st,i)=> i<storiesUnlocked
+        ? `<div class="story-item" onclick="showStoryModal(${i},false)"><div class="st-title">${st[0]} ${st[1]}</div><div class="st-tease">Tap to read again</div></div>`
+        : `<div class="story-item locked"><div class="st-title">\u{1F512} Story #${i+1}</div><div class="st-tease">Get ${(i+1)*3 - correctTotal>0?(i+1)*3 - correctTotal:3} more correct answers to unlock</div></div>`
+      ).join("")}</div>
+    </div>`;
+}
+
+/* ============ AHA! FACTS (shown right after answering these words) ============ */
+const AHA={
+addict:"\u2696\uFE0F In ancient Rome, an \u201caddict\u201d was a person a judge handed over to their creditor as a debt slave!",
+addiction:"\u2696\uFE0F Roman judges would \u201csay over\u201d (ad+dict) debtors to whoever they owed \u2014 that\u2019s where addiction comes from!",
+obsession:"\u{1F3F0} Obsession literally means \u201cto sit against\u201d \u2014 like a Roman army camping outside a city\u2019s walls in a siege!",
+inspire:"\u{1F32C}\uFE0F Ancients believed the gods literally breathed great ideas INTO artists\u2019 lungs!",
+inspiration:"\u{1F32C}\uFE0F Inspiration = \u201cbreathed into\u201d \u2014 people thought ideas were divine breath blown into you!",
+emotion:"\u{1F4A8} People once believed feelings were spirits physically MOVING OUT of your body!",
+confuse:"\u{1F964} Confused = \u201cpoured together\u201d \u2014 like two drinks mixed into one murky, unrecognizable cup!",
+confusion:"\u{1F964} Confusion pictures two liquids poured together into a blend you can\u2019t untangle!",
+distract:"\u{1F93C} Distracted literally means \u201cpulled apart\u201d \u2014 your attention yanked in two directions at once!",
+convince:"\u2694\uFE0F To convince someone is literally to CONQUER them in an argument \u2014 same root as victory!",
+conviction:"\u2694\uFE0F A conviction is a belief that has CONQUERED every doubt in your mind!",
+convict:"\u2694\uFE0F To convict = to conquer someone in court. Same vinc as invincible!",
+president:"\u{1F451} President literally means \u201cthe one who SITS in front\u201d \u2014 the best seat at the meeting!",
+extortion:"\u{1F9FB} Extortion = \u201ctwist out\u201d \u2014 like wringing money from someone the way you wring water from a towel!",
+command:"\u270B Command = \u201chand with\u201d \u2014 real authority meant literally getting your hands on the situation!",
+commander:"\u270B A commander takes things \u201cin hand\u201d \u2014 com + man(hand), same root as manual!",
+submit:"\u{1F447} Submit literally means \u201csend under\u201d \u2014 placing yourself beneath someone\u2019s authority!",
+accurate:"\u{1F3AF} Accurate = \u201crun to\u201d \u2014 an answer so precise it sprints straight to the bullseye!",
+accuracy:"\u{1F3AF} Accuracy pictures something RUNNING straight to the target without missing!",
+conclude:"\u{1F4E6} Conclude = \u201cclose together\u201d \u2014 finishing an argument was like shutting the lid on a box!",
+conclusion:"\u{1F4E6} A conclusion literally CLOSES the box on your story or argument!",
+postpone:"\u{1F5D3}\uFE0F Postpone = \u201cplace after\u201d \u2014 ancients pictured time as a road and moved tasks farther down the path!",
+record:"\u2764\uFE0F Record = \u201cback to the heart\u201d \u2014 Romans believed memory lived in the heart, so remembering meant returning something to it!",
+reflect:"\u{1FA9E} Reflect = \u201cbend back\u201d \u2014 exactly what light does on a mirror, and what your mind does on an idea!",
+reflection:"\u{1FA9E} A reflection literally BENDS light (or your thoughts) back at you!",
+depend:"\u{1FAA2} Depend = \u201chang down from\u201d \u2014 to depend on someone is to dangle from a rope you trust!",
+impulse:"\u26A1 An impulse is a force that literally DRIVES INTO your mind, skipping right past your thinking!",
+attract:"\u{1F9F2} Attract = \u201cpull toward\u201d \u2014 attractive things have a kind of gravity that pulls attention in!",
+attention:"\u{1F9E0} Attention = \u201chold to\u201d \u2014 when something interests you, your mind literally HOLDS ON to it!",
+assist:"\u{1F91D} Assist = \u201cstand to\u201d \u2014 helping began as standing beside someone in battle!",
+sequence:"\u{1F463} A sequence is literally \u201ca following\u201d \u2014 one thing walking behind another in a line!",
+department:"\u{1F52A} A department is a piece \u201cshared down\u201d \u2014 sliced off a bigger whole!",
+compartment:"\u{1F4E6} A compartment is a space \u201cshared with\u201d others \u2014 one slice of a divided box!",
+assessment:"\u2696\uFE0F An assessor originally SAT BESIDE a judge \u2014 assessment means \u201csit to\u201d!",
+eject:"\u{1F680} Eject = \u201cthrow out\u201d \u2014 the same picture as a pilot\u2019s ejector seat!",
+exclaim:"\u{1F4E3} Exclaim = \u201cshout out\u201d \u2014 words bursting out of you!",
+extract:"\u{1F9B7} Extract = \u201cpull out\u201d \u2014 exactly what a dentist does to a tooth!",
+interrupt:"\u{1F4A5} Interrupt = \u201cbreak between\u201d \u2014 smashing into the middle of someone\u2019s sentence!",
+transport:"\u{1F309} Trans- words are bridges \u2014 transport literally \u201ccarries across\u201d!",
+submerge:"\u{1F30A} Submerge = \u201cplunge under\u201d \u2014 straight underwater!",
+support:"\u{1F3D7}\uFE0F Support = \u201ccarry from under\u201d \u2014 holding something up from below!",
+suspend:"\u{1FA9D} Suspend = \u201chang under\u201d \u2014 like a bridge hanging beneath its cables!",
+predict:"\u{1F52E} Predict = \u201csay before\u201d \u2014 speaking the future before it happens!",
+prevent:"\u{1F6A7} Prevent = \u201ccome before\u201d \u2014 getting there FIRST so something can\u2019t happen!",
+project:"\u{1F3AF} Project = \u201cthrow forward\u201d \u2014 hurling an idea into the future!",
+propel:"\u{1F680} Propel = \u201cdrive forward\u201d \u2014 pure forward push, like a propeller!",
+revolve:"\u{1F504} Revolve = \u201croll back around\u201d \u2014 rolling again and again in a circle!",
+invisible:"\u{1F47B} Invisible uses the sneaky NOT in- : \u201cnot able to be seen\u201d!",
+incredible:"\u{1F92F} Incredible = \u201cnot believable\u201d \u2014 so amazing your brain refuses to believe it!"
+};
+function ahaLine(word){
+  const f=AHA[word];
+  return f?`<span class="expl" style="color:var(--sun);font-weight:800">\u{1F4A1} Aha! ${f}</span>`:"";
+}
+
+/* ============ STATE ============ */
+let mode="forge", score=0, streak=0, round=0, ROUNDS=10;
+let current=null, answered=false, forgePicks={};
+
+const $=id=>document.getElementById(id);
+const shuffle=a=>{a=a.slice();for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;};
+const pick=a=>a[Math.floor(Math.random()*a.length)];
+const meaningOf=(list,key)=>{const f=list.find(x=>x[0]===key);return f?f[1]:"";};
+
+function setMode(m){
+  mode=m; round=0; score=0; streak=0;
+  ["forge","decode","lexicon","cards","stories"].forEach(t=>$("tab-"+t).classList.toggle("active",t===m));
+  $("scorebar").style.display = (m==="lexicon"||m==="cards"||m==="stories") ? "none":"flex";
+  updateBar();
+  if(m==="lexicon") renderLexicon(); else if(m==="cards") renderCards(); else if(m==="stories") renderStories(); else nextRound();
+}
+function updateBar(){
+  $("score").textContent=score; $("streak").textContent=streak;
+  $("prog").style.width=(round/ROUNDS*100)+"%";
+  $("roundlabel").textContent=Math.min(round+1,ROUNDS)+" / "+ROUNDS;
+}
+function nextRound(){
+  if(round>=ROUNDS){renderDone();return;}
+  answered=false;
+  if(mode==="decode") renderDecode(); else renderForge();
+  updateBar();
+}
+function markResult(ok){
+  answered=true;
+  if(ok){score+=10+Math.min(streak,5)*2; streak++;} else streak=0;
+  round++;
+}
+
+/* ============ DECODE MODE ============ */
+function renderDecode(){
+  const w=pick(WORDS);
+  // choose which part to quiz: prefix, stem, or suffix (if present)
+  const parts=[["prefix",w[1],PREFIXES],["stem",w[2],STEMS],["suffix",w[3],SUFFIXES]].filter(p=>p[1]);
+  const [ptype,pkey,plist]=pick(parts);
+  const correct=meaningOf(plist,pkey);
+  const wrongs=shuffle(plist.filter(x=>x[0]!==pkey&&x[1]!==correct)).slice(0,3).map(x=>x[1]);
+  const opts=shuffle([correct,...wrongs]);
+  current={w,ptype,pkey,correct};
+
+  // build highlighted word display
+  const clean=s=>s?s.replace(/-/g,""):"";
+  const pre=clean(w[1]), stem=w[2], suf=clean(w[3]);
+  const word=w[0];
+  // find spans: approximate by matching the quizzed part inside the word
+  const target = ptype==="prefix"?pre : ptype==="suffix"?suf : stem;
+  let html=word;
+  const idx = ptype==="prefix" ? 0 : ptype==="suffix" ? word.length-suf.length : word.indexOf(stem);
+  if(idx>=0 && target && word.slice(idx,idx+target.length)===target){
+    html = word.slice(0,idx)+'<span class="hl">'+target+'</span>'+word.slice(idx+target.length);
+  } else {
+    html = word+' <span class="hl">('+pkey+')</span>';
+  }
+
+  $("stage").innerHTML=`
+    <div class="card">
+      <div class="prompt-label">🔍 Decode · What does the highlighted ${ptype} mean?</div>
+      <div class="bigword">${html}</div>
+      <div class="subtext">"${w[0]}" — ${w[5]}</div>
+      <div class="choices">${opts.map(o=>`<button class="choice" onclick="answerDecode(this,'${o.replace(/'/g,"\\'")}')">${o}</button>`).join("")}</div>
+      <div class="feedback" id="fb"></div>
+      <div class="actions"><button class="btn btn-ghost" id="nextbtn" style="display:none" onclick="nextRound()">Next word 👉</button></div>
+    </div>`;
+}
+function answerDecode(btn,val){
+  if(answered)return;
+  const ok = val===current.correct;
+  markResult(ok);
+  document.querySelectorAll(".choice").forEach(b=>{
+    b.disabled=true;
+    if(b.textContent===current.correct)b.classList.add("correct");
+  });
+  if(!ok)btn.classList.add("incorrect");
+  if(ok){sndCorrect();celebrateAt(btn);maybeUnlockStory();}else{sndWrong();}
+  const w=current.w;
+  const lit=`<span class="lit">${w[0]}</span> = ${[w[1],w[2],w[3]].filter(Boolean).join(" + ")} — literally "${w[4]}"`;
+  $("fb").className="feedback "+(ok?"good":"bad");
+  $("fb").innerHTML=(ok?"🎉 Nailed it! ":"💪 So close — check the answer! ")+`<span class="expl">${lit}</span>`+ahaLine(w[0]);
+  $("nextbtn").style.display="inline-block";
+  updateBar();
+}
+
+/* ============ FORGE MODE ============ */
+function renderForge(){
+  const w=pick(WORDS);
+  current={w};
+  forgePicks={prefix:null,stem:null,suffix:null};
+  const needSuffix=!!w[3], needPrefix=!!w[1];
+
+  const bankTiles=[];
+  if(needPrefix){
+    bankTiles.push({t:"prefix",v:w[1]});
+    shuffle(PREFIXES.filter(p=>p[0]!==w[1])).slice(0,2).forEach(p=>bankTiles.push({t:"prefix",v:p[0]}));
+  }
+  bankTiles.push({t:"stem",v:w[2]});
+  shuffle(STEMS.filter(s=>s[0]!==w[2])).slice(0,2).forEach(s=>bankTiles.push({t:"stem",v:s[0]}));
+  if(needSuffix){
+    bankTiles.push({t:"suffix",v:w[3]});
+    shuffle(SUFFIXES.filter(s=>s[0]!==w[3])).slice(0,2).forEach(s=>bankTiles.push({t:"suffix",v:s[0]}));
+  }
+  current.bank=shuffle(bankTiles);
+  current.needSuffix=needSuffix; current.needPrefix=needPrefix;
+
+  $("stage").innerHTML=`
+    <div class="card">
+      <div class="prompt-label">🔨 Forge · Build the word that means…</div>
+      <div class="bigword" style="font-size:clamp(22px,4vw,30px)">"${w[5]}"</div>
+      <div class="subtext">Literal Latin sense: <em>${w[4]}</em></div>
+      <div class="stick" id="stick">
+        ${needPrefix?'<div class="slot" id="slot-prefix"><span class="slabel">prefix</span><span class="sval">&nbsp;</span></div>':""}
+        <div class="slot" id="slot-stem"><span class="slabel">stem</span><span class="sval">&nbsp;</span></div>
+        ${needSuffix?'<div class="slot" id="slot-suffix"><span class="slabel">suffix</span><span class="sval">&nbsp;</span></div>':""}
+      </div>
+      <div class="bank" id="bank"></div>
+      <div class="actions">
+        <button class="btn btn-primary" onclick="checkForge()">Snap it together!</button>
+        <button class="btn btn-ghost" onclick="clearForge()">Clear</button>
+      </div>
+      <div class="feedback" id="fb"></div>
+      <div class="actions"><button class="btn btn-ghost" id="nextbtn" style="display:none" onclick="nextRound()">Next word 👉</button></div>
+    </div>`;
+  renderBank();
+}
+function renderBank(){
+  const lists={prefix:PREFIXES,stem:STEMS,suffix:SUFFIXES};
+  $("bank").innerHTML=current.bank.map((tile,i)=>{
+    const used=forgePicks[tile.t]===tile.v;
+    return `<button class="tile tile-${tile.t} ${used?"used":""}" onclick="pickTile(${i})">${tile.v}<small>${meaningOf(lists[tile.t],tile.v)}</small></button>`;
+  }).join("");
+  ["prefix","stem","suffix"].forEach(t=>{
+    const slot=$("slot-"+t); if(!slot)return;
+    const v=forgePicks[t];
+    slot.classList.toggle("filled",!!v);
+    slot.querySelector(".sval").innerHTML=v||"&nbsp;";
+    slot.onclick=v?()=>{if(!answered){forgePicks[t]=null;renderBank();}}:null;
+  });
+}
+function pickTile(i){
+  if(answered)return;
+  const tile=current.bank[i];
+  forgePicks[tile.t]=tile.v;
+  renderBank();
+}
+function clearForge(){ if(answered)return; forgePicks={prefix:null,stem:null,suffix:null}; renderBank(); }
+function checkForge(){
+  if(answered)return;
+  const w=current.w;
+  if((current.needPrefix&&!forgePicks.prefix)||!forgePicks.stem||(current.needSuffix&&!forgePicks.suffix)){
+    $("fb").className="feedback"; $("fb").textContent="Snap a block into every empty slot first!";
+    return;
+  }
+  const ok = (!current.needPrefix||forgePicks.prefix===w[1])&&forgePicks.stem===w[2]&&(!current.needSuffix||forgePicks.suffix===w[3]);
+  markResult(ok);
+  if(ok){sndCorrect();celebrateAt($("stick"));maybeUnlockStory();}else{sndWrong();}
+  $("fb").className="feedback "+(ok?"good":"bad");
+  $("fb").innerHTML=(ok?"🎉 SNAP! You built it! ":"💪 Good try! Peek at the answer — you\u2019ll crush it next time. ")+
+    `<span class="expl"><span class="lit">${w[0]}</span> = ${[w[1],w[2],w[3]].filter(Boolean).join(" + ")} — literally "${w[4]}"</span>`+ahaLine(w[0]);
+  $("nextbtn").style.display="inline-block";
+  updateBar();
+}
+
+/* ============ LEXICON ============ */
+let lexTab="prefix";
+function renderLexicon(){
+  $("stage").innerHTML=`
+    <div class="card">
+      <div class="prompt-label">📚 Lexicon · Every word part in the game</div>
+      <div class="lex-tabs">
+        <button id="lt-prefix" onclick="setLexTab('prefix')">Prefixes (${PREFIXES.length})</button>
+        <button id="lt-stem" onclick="setLexTab('stem')">Stems (${STEMS.length})</button>
+        <button id="lt-suffix" onclick="setLexTab('suffix')">Suffixes (${SUFFIXES.length})</button>
+      </div>
+      <input class="lex-search" id="lexsearch" placeholder="Search a part, meaning, or example…" oninput="renderLexGrid()">
+      <div class="lex-grid" id="lexgrid"></div>
+    </div>`;
+  setLexTab(lexTab);
+}
+function setLexTab(t){
+  lexTab=t;
+  ["prefix","stem","suffix"].forEach(x=>$("lt-"+x).classList.toggle("active",x===t));
+  renderLexGrid();
+}
+function renderLexGrid(){
+  const list={prefix:PREFIXES,stem:STEMS,suffix:SUFFIXES}[lexTab];
+  const q=($("lexsearch").value||"").toLowerCase();
+  let html=list
+    .filter(x=>!q||x.join(" ").toLowerCase().includes(q))
+    .map(x=>{
+      const hasFam = lexTab==="prefix" && FAMILY_NOTES[x[0]];
+      const open = hasFam && openFamily===x[0];
+      let item=`<div class="lex-item ${hasFam?"expandable":""}" ${hasFam?`onclick="toggleFamily('${x[0]}')"`:""}>
+        <div class="part">${x[0]} ${hasFam?(open?"\u25B4":"\u25BE"):""}</div>
+        <div class="mean">${x[1]}</div><div class="ex">as in <em>${x[2]}</em>${hasFam?" \u00b7 <b>tap for the family story!</b>":""}</div></div>`;
+      if(open){
+        item+=`<div class="family-panel"><h3>The ${x[0]} family</h3>
+          <div class="fam-story">${FAMILY_NOTES[x[0]]}</div>
+          <div class="family-chips">${familyWords(x[0]).map(w=>"<span>"+w+"</span>").join("")}</div></div>`;
+      }
+      return item;
+    })
+    .join("")||'<div style="color:var(--cloud)">No parts match that search.</div>';
+  $("lexgrid").innerHTML=html;
+}
+
+/* ============ FLASHCARDS ============ */
+let fcTab="all", fcDeck=[], fcIdx=0, fcFlipped=false;
+function renderCards(){
+  $("stage").innerHTML=`
+    <div class="card">
+      <div class="prompt-label">⚡ Flashcards · Tap a card to flip it!</div>
+      <div class="lex-tabs">
+        <button id="fct-all" onclick="setFcTab('all')">All (${PREFIXES.length+STEMS.length+SUFFIXES.length})</button>
+        <button id="fct-prefix" onclick="setFcTab('prefix')">Prefixes (${PREFIXES.length})</button>
+        <button id="fct-stem" onclick="setFcTab('stem')">Stems (${STEMS.length})</button>
+        <button id="fct-suffix" onclick="setFcTab('suffix')">Suffixes (${SUFFIXES.length})</button>
+        <button id="fct-words" onclick="setFcTab('words')">Words (${WORDS.length})</button>
+      </div>
+      <div class="fc-stage">
+        <button class="flashcard" id="fcard" onclick="flipCard()" aria-label="Flip flashcard">
+          <div class="fc-inner">
+            <div class="fc-face fc-front">
+              <div class="fc-type" id="fc-type"></div>
+              <div class="fc-part" id="fc-front-part"></div>
+              <div class="fc-hint">👆 tap to flip!</div>
+            </div>
+            <div class="fc-face fc-back">
+              <div class="fc-part" id="fc-back-part"></div>
+              <div class="fc-mean" id="fc-mean"></div>
+              <div class="fc-ex" id="fc-ex"></div>
+            </div>
+          </div>
+        </button>
+        <div class="fc-count" id="fc-count"></div>
+        <div class="fc-nav">
+          <button class="btn btn-ghost" onclick="fcMove(-1)">← Previous</button>
+          <button class="btn btn-primary" onclick="fcMove(1)">Next →</button>
+          <button class="btn btn-ghost" onclick="fcShuffle()">Shuffle</button>
+        </div>
+      </div>
+    </div>`;
+  setFcTab(fcTab);
+}
+function fcList(){
+  if(fcTab==="prefix")return PREFIXES.map(x=>["prefix",...x]);
+  if(fcTab==="stem")return STEMS.map(x=>["stem",...x]);
+  if(fcTab==="suffix")return SUFFIXES.map(x=>["suffix",...x]);
+  if(fcTab==="words")return WORDS.map(w=>["word",...w]);
+  return [...PREFIXES.map(x=>["prefix",...x]),...STEMS.map(x=>["stem",...x]),...SUFFIXES.map(x=>["suffix",...x]) ];
+}
+function setFcTab(t){
+  fcTab=t;
+  ["all","prefix","stem","suffix","words"].forEach(x=>$("fct-"+x).classList.toggle("active",x===t));
+  fcDeck=shuffle(fcList()); fcIdx=0; fcFlipped=false;
+  showCard();
+}
+function showCard(){
+  const c=fcDeck[fcIdx];
+  $("fcard").classList.toggle("flipped",fcFlipped);
+  if(c[0]==="word"){
+    // c = ["word", word, prefix, stem, suffix, literal, definition]
+    const parts=[c[2],c[3],c[4]].filter(Boolean).join(" + ");
+    $("fc-type").textContent="word";
+    $("fc-front-part").textContent=c[1];
+    $("fc-front-part").style.fontSize=c[1].length>12?"34px":"44px";
+    $("fc-back-part").textContent=parts;
+    $("fc-mean").innerHTML='<span class="fc-lit">literally \u201c'+c[5]+'\u201d</span>';
+    $("fc-ex").innerHTML='<span class="fc-def">'+c[6]+'</span>';
+    $("fc-count").textContent=(fcIdx+1)+" of "+fcDeck.length+" \u00b7 words";
+  }else{
+    $("fc-type").textContent=c[0];
+    $("fc-front-part").textContent=c[1];
+    $("fc-front-part").style.fontSize="";
+    $("fc-back-part").textContent=c[1];
+    $("fc-mean").textContent=c[2];
+    $("fc-ex").innerHTML="as in <em>"+c[3]+"</em>";
+    $("fc-count").textContent=(fcIdx+1)+" of "+fcDeck.length+" \u00b7 "+(fcTab==="all"?"all parts":fcTab+"s");
+  }
+}
+function flipCard(){ fcFlipped=!fcFlipped; sndFlip(); $("fcard").classList.toggle("flipped",fcFlipped); }
+function fcMove(d){
+  fcFlipped=false;
+  fcIdx=(fcIdx+d+fcDeck.length)%fcDeck.length;
+  showCard();
+}
+function fcShuffle(){ fcDeck=shuffle(fcDeck); fcIdx=0; fcFlipped=false; showCard(); }
+
+/* ============ PREFIX FAMILY JOURNEYS ============ */
+const FAMILY_NOTES={
+"ad-":"The \u201cad- family\u201d is all about moving TOWARD things. Ancient speakers turned physical motion into ideas: accurate means \u201crun to\u201d (hit the target!), attract means \u201cpull to,\u201d assist means \u201cstand to\u201d (standing beside a friend in battle), and attention means \u201chold to\u201d \u2014 your mind literally holding onto something. Ad- shape-shifts to match the next letter: ac-, af-, ap-, as-, at-!",
+"con-":"The \u201ccon- family\u201d is about doing things TOGETHER. Comfort = \u201cstrong with\u201d (lending someone your strength), command = \u201chand with\u201d (taking things in hand), confuse = \u201cpour together\u201d (a murky mixed-up drink), and conclude = \u201cclose with\u201d (shutting the box). Con- disguises itself as com-, col-, cor-, and co-.",
+"de-":"The \u201cde- family\u201d points DOWN and AWAY. Depend = \u201chang down from\u201d (like dangling from a rope you trust!), describe = \u201cwrite down,\u201d and depart = \u201cshare away\u201d \u2014 splitting off from the group. When you see de-, picture something dropping or leaving.",
+"ex-":"The \u201cex- family\u201d bursts OUT. Emotion = \u201cmoving out\u201d (feelings escaping your body), exclaim = \u201cshout out,\u201d extract = \u201cpull out\u201d (like a dentist!), and extortion = \u201ctwist out.\u201d Ex- sometimes shrinks to just e- (eject, emerge) or ef- (effect).",
+"in-":"The sneaky \u201cin- family\u201d has TWO jobs: going INTO (inject = throw in, inspire = breathe in) and saying NOT (invisible = not seeable, incredible = not believable). It also shape-shifts: im-, il-, ir-. You have to read the whole word to know which in- you\u2019ve met!",
+"pro-":"The \u201cpro- family\u201d charges FORWARD. Propel = \u201cdrive forward,\u201d project = \u201cthrow forward,\u201d promote = \u201cmove forward,\u201d and produce = \u201clead forward.\u201d Pro- words are the go-getters of English \u2014 always pushing ahead!",
+"re-":"The mighty \u201cre- family\u201d goes BACK and AGAIN \u2014 it\u2019s the most-used prefix in English! Reject = \u201cthrow back,\u201d record = \u201cheart back\u201d (returning something to your heart to remember it!), reflect = \u201cbend back\u201d (like light off a mirror), and revolve = \u201croll back around.\u201d",
+"sub-":"The \u201csub- family\u201d lives UNDER everything. Submit = \u201csend under\u201d (placing yourself beneath someone\u2019s authority), submerge = \u201cplunge under,\u201d support = \u201ccarry from under\u201d (holding something up!). It disguises itself as sup-, sus-, suc-, suf-.",
+"trans-":"The \u201ctrans- family\u201d crosses OVER. Transport = \u201ccarry across,\u201d transmit = \u201csend across,\u201d translucent = \u201clight shining across/through.\u201d Trans- words are bridges \u2014 they always take something from one side to the other.",
+"post-":"The \u201cpost- family\u201d comes AFTER. Postpone = \u201cplace after\u201d \u2014 ancient people pictured time as a road, and delaying meant setting a task farther down the path. A postscript (P.S.!) is \u201cwritten after\u201d the letter ends.",
+"pre-":"The \u201cpre- family\u201d comes BEFORE. Predict = \u201csay before,\u201d prevent = \u201ccome before\u201d (getting there first to stop something!), and president = \u201cthe one who sits before\u201d the assembly. Pre- words are the early birds.",
+"inter-":"The \u201cinter- family\u201d lives BETWEEN. Interrupt = \u201cbreak between\u201d (smashing into the middle of a sentence!), intersect = \u201ccut between,\u201d and an interlude = \u201ca play between\u201d acts. Inter- is the in-betweener."
+};
+let openFamily=null;
+function toggleFamily(prefix){
+  openFamily = openFamily===prefix ? null : prefix;
+  renderLexGrid();
+}
+function familyWords(prefix){
+  return WORDS.filter(w=>w[1]===prefix).map(w=>w[0]).slice(0,14);
+}
+
+/* ============ DONE ============ */
+function renderDone(){
+  const msg = score>=120?"🏆 WORD WIZARD! You\u2019re unstoppable!":score>=80?"🌟 Word Builder — awesome run!":"🚀 Great practice! Every round makes you stronger.";
+  $("stage").innerHTML=`
+    <div class="card done-card">
+      <div class="prompt-label">You did it!</div>
+      <div class="score-big">${score}</div>
+      <div class="subtext">${msg}</div>
+      <div class="actions">
+        <button class="btn btn-primary" onclick="setMode('${mode}')">Play again</button>
+        <button class="btn btn-ghost" onclick="setMode('${mode==="forge"?"decode":"forge"}')">Try ${mode==="forge"?"Decode":"Forge"}</button>
+      </div>
+    </div>`;
+}
+
+updateStoryCount();
+setMode("forge");
+</script>
+</body>
+</html>
