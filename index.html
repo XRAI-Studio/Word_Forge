@@ -4,9 +4,16 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Word Forge — Latin Roots</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Nunito:wght@600;700;800;900&display=swap" rel="stylesheet">
+<meta name="theme-color" content="#2C4BE0">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Word Forge">
 <style>
+/* Fonts are self-hosted so the game works with no network at all. Both
+   families are variable fonts, so one file covers every weight used. */
+@font-face{font-family:'Baloo 2';font-style:normal;font-weight:600 800;font-display:swap;src:url(fonts/baloo2.woff2) format('woff2');unicode-range:U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD}
+@font-face{font-family:'Nunito';font-style:normal;font-weight:600 900;font-display:swap;src:url(fonts/nunito.woff2) format('woff2');unicode-range:U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD}
 :root{
   --sky:#2C4BE0;          /* electric royal blue */
   --sky-deep:#1B2FA0;
@@ -985,6 +992,21 @@ const STORIES=[
 ["📦","Conclude: Close the Box","Conclude = con- (together) + clud (close/shut). Finishing an argument or story was pictured as shutting a box or closing a door. When you conclude an essay, you\u2019re closing the lid on it!"]
 ];
 let storiesUnlocked=0, correctTotal=0;
+/* Saved progress. Only the cumulative unlock state belongs here: score,
+   streak and round are reset by setMode on purpose. Every access is
+   guarded, since localStorage throws outright in some privacy modes. */
+const PROGRESS_KEY="wordforge:progress";
+function saveProgress(){
+  try{ localStorage.setItem(PROGRESS_KEY, JSON.stringify({storiesUnlocked, correctTotal})); }catch(e){}
+}
+function loadProgress(){
+  try{
+    const raw=localStorage.getItem(PROGRESS_KEY); if(!raw) return;
+    const saved=JSON.parse(raw);
+    storiesUnlocked=Math.max(0, Math.min(STORIES.length, saved.storiesUnlocked|0));
+    correctTotal=Math.max(0, saved.correctTotal|0);
+  }catch(e){}
+}
 function updateStoryCount(){ $("story-count").textContent = storiesUnlocked?("("+storiesUnlocked+")"):""; }
 function maybeUnlockStory(){
   correctTotal++;
@@ -993,6 +1015,7 @@ function maybeUnlockStory(){
     updateStoryCount();
     setTimeout(()=>showStoryModal(storiesUnlocked-1,true),900);
   }
+  saveProgress();
 }
 function showStoryModal(i,isNew){
   const st=STORIES[i];
@@ -1406,8 +1429,17 @@ function renderDone(){
     </div>`;
 }
 
+loadProgress();
 updateStoryCount();
 setMode("forge");
+
+/* Offline support. Guarded so the game still runs when opened straight
+   from the filesystem, where service workers are unavailable. */
+if("serviceWorker" in navigator){
+  window.addEventListener("load",()=>{
+    try{ navigator.serviceWorker.register("sw.js"); }catch(e){}
+  });
+}
 </script>
 </body>
 </html>

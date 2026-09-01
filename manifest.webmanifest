@@ -1,0 +1,19 @@
+{
+  "name": "Word Forge — Latin Roots",
+  "short_name": "Word Forge",
+  "description": "Learn to read English through its Latin building blocks: snap prefixes, stems and suffixes together to forge real words.",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#2C4BE0",
+  "theme_color": "#2C4BE0",
+  "categories": ["education", "games"],
+  "lang": "en",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
