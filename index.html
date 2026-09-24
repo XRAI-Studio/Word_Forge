@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Word Forge has moved</title>
+<meta http-equiv="refresh" content="3;url=https://wordforge.travelschooling.com/">
+<style>body{font-family:system-ui,sans-serif;margin:3rem auto;max-width:36rem;padding:0 1rem;line-height:1.5}a{color:#2C4BE0}</style>
+</head>
+<body>
+<h1>Word Forge has moved</h1>
+<p>The game now lives at <a href="https://wordforge.travelschooling.com/">wordforge.travelschooling.com</a>,
+as a Travel Schooling class. You are being sent there now.</p>
+<script>
+// Release an installed copy from the old service worker and its caches, touching ONLY
+// Word Forge's registration and caches: xrai-studio.github.io is one origin shared by
+// every project site. This function is tools/pages-stub/cleanup.js on the main branch,
+// inlined verbatim (the gh-pages branch has no build).
+function selectWordForgeCleanup({ registrations = [], cacheNames = [] } = {}) {
+  const unregister = registrations.filter((r) => typeof r.scope === 'string' && /\/Word_Forge\/$/.test(r.scope));
+  const deleteCaches = cacheNames.filter((n) => n === 'word-forge-v1' || n === 'word-forge-v2');
+  return { unregister, deleteCaches };
+}
+(async () => {
+  try {
+    const registrations = 'serviceWorker' in navigator ? await navigator.serviceWorker.getRegistrations() : [];
+    const cacheNames = 'caches' in window ? await caches.keys() : [];
+    const plan = selectWordForgeCleanup({ registrations, cacheNames });
+    await Promise.allSettled([
+      ...plan.unregister.map((r) => r.unregister()),
+      ...plan.deleteCaches.map((n) => caches.delete(n)),
+    ]);
+  } catch (e) {
+    // Cleanup is best effort; the redirect still happens.
+  }
+  location.replace('https://wordforge.travelschooling.com/');
+})();
+</script>
+</body>
+</html>
