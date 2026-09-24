@@ -65,3 +65,28 @@ Proofs: `npm run verify` → typecheck and lint clean, 15 Node tests, 24 vitest 
 200 with headers; development mode: boot with the mock kit, manifest link credentials,
 `story_unlocked` once after three correct answers, `word_forged` for the current word,
 repository files 404, game files 200).
+
+### CI, live and Pages evidence after commit `5dcf74c` (2026-09-24)
+
+- CI: `verify` (inlined steps) run 35954417557 **success** (criterion 6).
+- Live, 10 s after the push, without a cookie: `/` → 307 to
+  `https://class.travelschooling.com/login?next=https%3A%2F%2Fwordforge.travelschooling.com%2F`
+  with the four headers and Vercel's HSTS (the certificate was already issued: the DNS
+  record predated the project); `/sw.js`, `/kit.js`, `/sw-policy.js`, `/fonts/nunito.woff2`,
+  `/icons/icon-192.png` → 200; `/manifest.webmanifest`, `/README.md`,
+  `/word-forge-500-words.md` → 307 to the login with the path in `next=` (criterion 2,
+  anonymous half).
+- GitHub Pages: orphan branch `gh-pages` (`2534045`: `index.html`, `sw.js`, `.nojekyll`)
+  pushed; Pages source switched to `gh-pages` / `/` through the API. The switch alone
+  built nothing (the latest build was still `main`'s, serving a Jekyll rendering of the
+  new README), so a build was requested through the API; after it,
+  `https://xrai-studio.github.io/Word_Forge/` answers the stub (title "Word Forge has
+  moved", `location.replace` present, no game data) and `/Word_Forge/sw.js` answers 200
+  (criterion 7). Recorded as a deviation from the plan's "switched through the API"
+  wording: the switch plus one explicit build request.
+- Portal follow-up (`travelschooling-portal` `f6bf0c6`): the `wordforge` row lost its
+  `pending` flag in `scripts/check-dns.mjs` (live `npm run dns:check` still ok), the
+  guard's tests updated, and `docs/class-standard.md` marks Word Forge on the standard.
+- Signed-in live checks (criterion 10, and the manifest request with credentials in a
+  fresh signed-in context): **awaiting user verification**; the host's browser has no
+  portal session and the host does not enter credentials.
