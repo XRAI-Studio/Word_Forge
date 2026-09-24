@@ -24,6 +24,21 @@ test('a response from another origin is not', () => {
   assert.equal(cacheablePage(res({ url: 'https://class.travelschooling.com/' }), ORIGIN), false);
 });
 
+test('install-time precache: a redirected 200 login page fetched for ./index.html is refused by the same policy', () => {
+  // The gate redirected the precache fetch; the response is a 200 from the portal login.
+  const redirectedLogin = { status: 200, redirected: true, url: 'https://class.travelschooling.com/login?next=https%3A%2F%2Fwordforge.travelschooling.com%2Findex.html' };
+  assert.equal(cacheablePage(redirectedLogin, ORIGIN), false);
+});
+
+test('sw.js warms every shell entry through the policy and nowhere else decides by response.ok', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const src = await readFile(new URL('../public/sw.js', import.meta.url), 'utf8');
+  const warm = src.slice(src.indexOf('function warm('), src.indexOf('self.addEventListener("install"'));
+  assert.match(warm, /WF_POLICY\.cacheablePage\(response, self\.location\.origin\)/);
+  assert.doesNotMatch(warm, /response\.ok/);
+  assert.doesNotMatch(warm, /response\.url/);
+});
+
 test('a non-200 response is not, and a missing response is not', () => {
   assert.equal(cacheablePage(res({ status: 307 }), ORIGIN), false);
   assert.equal(cacheablePage(res({ status: 404 }), ORIGIN), false);

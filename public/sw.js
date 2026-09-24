@@ -37,15 +37,15 @@ function isPageUrl(url) {
   return url.pathname.endsWith("/") || url.pathname.endsWith("index.html");
 }
 
-/** Warm one shell entry; page entries obey the policy, assets only need a 200. */
+/**
+ * Warm one shell entry. Every entry, page or asset, is stored only when the policy
+ * accepts the response (200, not redirected, same origin): a request that the gate
+ * redirected to the portal login must never be stored under the requested URL, whatever
+ * the response's final URL looks like.
+ */
 function warm(cache, url) {
   return fetch(url, { credentials: "same-origin" })
-    .then((response) => {
-      const ok = isPageUrl(new URL(response.url || url, self.location.href))
-        ? self.WF_POLICY.cacheablePage(response, self.location.origin)
-        : response.ok;
-      return ok ? cache.put(url, response) : undefined;
-    })
+    .then((response) => (self.WF_POLICY.cacheablePage(response, self.location.origin) ? cache.put(url, response) : undefined))
     .catch(() => undefined);
 }
 

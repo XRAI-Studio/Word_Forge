@@ -90,3 +90,23 @@ repository files 404, game files 200).
 - Signed-in live checks (criterion 10, and the manifest request with credentials in a
   fresh signed-in context): **awaiting user verification**; the host's browser has no
   portal session and the host does not enter credentials.
+
+## Inspection 1 — Codex (REVISE)
+
+Runner result: `scratchpad/claudex-runs/claudex-atva1we1/result.json`, fresh session
+`01a0d1a1-96c1-7581-8121-3464040c35c5`, base `ea380c8`, inspected tree = `abaecff`, CLI
+`codex-cli 0.153.4`, requested model: CLI default (`gpt-6-astra` / `high`). Usage:
+2,257,203 input tokens (2,024,448 cached), 6,290 output. Elapsed 241 s. One finding,
+accepted (fix round 1 of 2):
+
+- **WF-P4-INS-001 (medium)** `warm()` classified the *response's* URL rather than the
+  requested one, so a precache fetch for `./index.html` that the gate redirected to the
+  portal login (a 200 at `/login?next=…`) would be treated as an asset and stored under
+  `./index.html`. *Fixed:* every shell entry, page or asset, is stored only when
+  `WF_POLICY.cacheablePage` accepts the response (200, not redirected, same origin).
+  Tests: the redirected login response is refused, and a source-level guard asserts
+  `warm()` decides only through the policy (no `response.ok`, no `response.url`).
+
+Fix round 1 proofs: `npm run verify` → typecheck and lint clean, 17 Node tests (was 15),
+24 vitest tests; `npm run e2e` PASS (both parts). Sent for inspection 2 (the last of the
+two authorized).
