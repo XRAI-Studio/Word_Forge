@@ -110,3 +110,20 @@ accepted (fix round 1 of 2):
 Fix round 1 proofs: `npm run verify` → typecheck and lint clean, 17 Node tests (was 15),
 24 vitest tests; `npm run e2e` PASS (both parts). Sent for inspection 2 (the last of the
 two authorized).
+
+## Inspection 2 — Codex (APPROVED)
+
+Runner result: `scratchpad/claudex-runs/claudex-f238m7yj/result.json`, fresh session
+`01a0d1a6-f75c-7212-9eec-67fdbc97f326`, base `ea380c8`, inspected tree = `bbdf333`.
+Usage: 1,480,134 input tokens (1,272,064 cached), 3,349 output. Elapsed 149 s. "No material
+unresolved defects identified. The precache fix consistently rejects redirected,
+cross-origin, and non-200 responses." Limitations: signed-in manifest loading, the
+browser worker lifecycle and the installed-PWA migration were not exercised.
+
+**Round accounting, Word Forge Phase 4:** plan review 2 rounds (approved at
+`1dd0db5f524b231872790716a15e5c88722e4b0f6758fa5c45b4ac8df8dda867`), fix rounds 1 of 2,
+inspections 2. Closed: WF-P4-001..004, WF-P4-INS-001. Deviations recorded: an explicit
+Pages build request after the source switch. Open (user): the signed-in live checks
+(game load, `word_forged` and `story_unlocked` awards, the manifest request with
+credentials in a fresh signed-in context), and, on a device with the old GitHub Pages copy
+installed, one online visit to confirm it lands on the new host.
