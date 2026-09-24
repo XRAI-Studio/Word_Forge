@@ -1,0 +1,26 @@
+# The class standard's shared workflow (travelschooling-portal/.github/workflows/class-verify.yml)
+# cannot be called from here: this repository is public and the portal is private, and
+# GitHub does not let a public repository use a private repository's reusable workflow.
+# These are the same steps, inlined; keep them in step with class-verify.yml.
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - run: npm run verify

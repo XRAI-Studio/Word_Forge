@@ -1,8 +1,9 @@
 {
   "schemaVersion": 1,
   "title": "Word Forge",
-  "description": "An educational game that teaches kids to read English through its Latin building blocks — prefix + stem + suffix. Snap colour-coded parts together to forge words, decode meanings, browse a lexicon of 182 parts, drill flashcards, and unlock word-history stories. 500 real words, no install, works in the browser.",
+  "description": "An educational game that teaches kids to read English through its Latin building blocks — prefix + stem + suffix. Snap colour-coded parts together to forge words, decode meanings, browse a lexicon of 182 parts, drill flashcards, and unlock word-history stories. 500 real words. A Travel Schooling class: sign in at the portal, and every forged word earns XP.",
   "owner": "scott",
-  "liveUrl": "https://xrai-studio.github.io/Word_Forge/",
+  "liveUrl": "https://wordforge.travelschooling.com",
+  "embeddable": false,
   "accent": "#ff5a1f"
 }

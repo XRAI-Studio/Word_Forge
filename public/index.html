@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Word Forge — Latin Roots</title>
 <meta name="theme-color" content="#2C4BE0">
-<link rel="manifest" href="manifest.webmanifest">
+<link rel="manifest" href="manifest.webmanifest" crossorigin="use-credentials">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Word Forge">
@@ -220,6 +220,47 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--sun);outline-of
 <div id="sparkle-layer"></div>
 </div>
 
+<!-- Portal kit (class standard rule 3): the kit script first, then a module that starts it
+     and installs window.__wfAward for the game script below. On localhost kit.js supplies a
+     mock, so the game runs without a portal session. -->
+<div id="kit-banner" style="display:none;position:fixed;left:0;right:0;top:0;z-index:9999;padding:10px 16px;background:#1b1b1b;color:#fff;font:600 15px system-ui,sans-serif;text-align:center"></div>
+<script src="https://class.travelschooling.com/kit/v1/ts-kit.js"></script>
+<script type="module">
+import { initKit, award, sameAccount } from './kit.js';
+const banner = document.getElementById('kit-banner');
+function showBanner(text) { banner.textContent = text; banner.style.display = 'block'; }
+const start = await initKit();
+if (start.kind === 'redirecting') {
+  showBanner('Sending you to sign in…');
+} else if (start.kind === 'unavailable') {
+  showBanner('Could not reach the school portal. ');
+  const retry = document.createElement('button');
+  retry.type = 'button';
+  retry.dataset.testid = 'retry-kit';
+  retry.textContent = 'Try again';
+  retry.style.cssText = 'margin-left:8px;padding:4px 10px;border-radius:999px;border:0;font:inherit';
+  retry.addEventListener('click', () => location.reload());
+  banner.appendChild(retry);
+} else {
+  const kit = start.kit;
+  // The kit captured one learner's token at init: if the portal signs someone else in (or
+  // out) under this open tab, stop awarding and reload through the gate.
+  let restarting = false;
+  function restart() {
+    if (restarting) return;
+    restarting = true;
+    showBanner('The signed-in account changed. Reloading…');
+    location.reload();
+  }
+  window.__wfAward = (event, detail) => {
+    if (restarting) return false;
+    return award(kit, event, detail, { onMismatch: restart });
+  };
+  const check = () => { if (!sameAccount(kit, document.cookie)) restart(); };
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') check(); });
+  window.addEventListener('focus', check);
+}
+</script>
 <script>
 /* ============ DATA ============ */
 const PREFIXES = [
@@ -1012,6 +1053,7 @@ function maybeUnlockStory(){
   correctTotal++;
   if(correctTotal%3===0 && storiesUnlocked<STORIES.length){
     storiesUnlocked++;
+    window.__wfAward?.('story_unlocked',{story:storiesUnlocked});
     updateStoryCount();
     setTimeout(()=>showStoryModal(storiesUnlocked-1,true),900);
   }
@@ -1177,7 +1219,7 @@ function answerDecode(btn,val){
     if(b.textContent===current.correct)b.classList.add("correct");
   });
   if(!ok)btn.classList.add("incorrect");
-  if(ok){sndCorrect();celebrateAt(btn);maybeUnlockStory();}else{sndWrong();}
+  if(ok){sndCorrect();celebrateAt(btn);window.__wfAward?.('word_forged',{word:current.w[0]});maybeUnlockStory();}else{sndWrong();}
   const w=current.w;
   const lit=`<span class="lit">${w[0]}</span> = ${[w[1],w[2],w[3]].filter(Boolean).join(" + ")} — literally "${w[4]}"`;
   $("fb").className="feedback "+(ok?"good":"bad");
@@ -1257,7 +1299,7 @@ function checkForge(){
   }
   const ok = (!current.needPrefix||forgePicks.prefix===w[1])&&forgePicks.stem===w[2]&&(!current.needSuffix||forgePicks.suffix===w[3]);
   markResult(ok);
-  if(ok){sndCorrect();celebrateAt($("stick"));maybeUnlockStory();}else{sndWrong();}
+  if(ok){sndCorrect();celebrateAt($("stick"));window.__wfAward?.('word_forged',{word:w[0]});maybeUnlockStory();}else{sndWrong();}
   $("fb").className="feedback "+(ok?"good":"bad");
   $("fb").innerHTML=(ok?"🎉 SNAP! You built it! ":"💪 Good try! Peek at the answer — you\u2019ll crush it next time. ")+
     `<span class="expl"><span class="lit">${w[0]}</span> = ${[w[1],w[2],w[3]].filter(Boolean).join(" + ")} — literally "${w[4]}"</span>`+ahaLine(w[0]);
