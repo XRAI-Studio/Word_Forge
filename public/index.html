@@ -43,6 +43,22 @@ h1{font-family:'Baloo 2',sans-serif;font-weight:800;font-size:clamp(32px,6vw,48p
    text-shadow:0 4px 0 rgba(10,18,70,.5)}
 h1 .dot{color:var(--sun)}
 .tagline{color:var(--cloud);font-size:14px;font-weight:800;background:rgba(255,255,255,.1);padding:8px 16px;border-radius:999px}
+.header-side{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+/* Return to Home Room: an outlined pill, so it never reads as a game tab or a game action. */
+.home-btn{
+  font-family:'Nunito',system-ui,sans-serif;font-weight:800;font-size:14px;
+  background:transparent;color:var(--white);border:2px solid var(--cloud);border-radius:999px;
+  padding:7px 16px;cursor:pointer;transition:background .12s,border-color .12s;
+}
+.home-btn:hover{background:rgba(255,255,255,.12);border-color:var(--white)}
+.home-btn:focus-visible{outline:3px solid var(--sun);outline-offset:3px;border-color:var(--sun)}
+/* leave dialog */
+.leave-overlay{position:fixed;inset:0;background:rgba(10,16,60,.7);display:flex;align-items:center;justify-content:center;z-index:200;padding:16px}
+.leave-overlay[hidden]{display:none}
+.leave-card{background:var(--sky-deep);border:4px solid var(--sun);color:var(--white);border-radius:26px;max-width:460px;width:100%;padding:28px 24px;box-shadow:0 10px 0 rgba(10,18,70,.5),0 30px 60px rgba(0,0,0,.5);text-align:center}
+.leave-card h2{font-family:'Baloo 2',sans-serif;font-weight:800;font-size:24px;color:var(--sun);margin-bottom:10px}
+.leave-card p{font-size:16px;line-height:1.5;margin-bottom:6px}
+.leave-card .actions{margin-top:18px}
 nav{display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap}
 nav button{
   font-family:'Baloo 2',sans-serif;font-weight:700;font-size:16px;
@@ -198,7 +214,10 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--sun);outline-of
 <div class="wrap">
   <header>
     <h1>Word Forge<span class="dot">.</span></h1>
-    <div class="tagline">🧩 Snap Latin parts together. Unlock big words!</div>
+    <div class="header-side">
+      <div class="tagline">🧩 Snap Latin parts together. Unlock big words!</div>
+      <button type="button" id="home-room" class="home-btn" onclick="returnToHomeRoom()">Return to Home Room</button>
+    </div>
   </header>
 
   <nav>
@@ -220,13 +239,28 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--sun);outline-of
 <div id="sparkle-layer"></div>
 </div>
 
+<!-- Shown by the Return to Home Room button when leaving now would lose work. -->
+<div id="leave-overlay" class="leave-overlay" hidden>
+  <div class="leave-card" role="dialog" aria-modal="true" aria-labelledby="leave-title" aria-describedby="leave-msg">
+    <h2 id="leave-title">Not saved yet</h2>
+    <div id="leave-msg"></div>
+    <div class="actions">
+      <button type="button" class="btn btn-primary" id="leave-stay">Stay and save</button>
+      <button type="button" class="btn btn-ghost" id="leave-go">Leave without saving</button>
+    </div>
+  </div>
+</div>
+
 <!-- Portal kit (class standard rule 3): the kit script first, then a module that starts it
      and installs window.__wfAward for the game script below. On localhost kit.js supplies a
      mock, so the game runs without a portal session. -->
 <div id="kit-banner" style="display:none;position:fixed;left:0;right:0;top:0;z-index:9999;padding:10px 16px;background:#1b1b1b;color:#fff;font:600 15px system-ui,sans-serif;text-align:center"></div>
 <script src="https://class.travelschooling.com/kit/v1/ts-kit.js"></script>
 <script type="module">
-import { initKit, award, sameAccount } from './kit.js';
+import { initKit, award, sameAccount, flushAwards } from './kit.js';
+// The Home Room button waits (bounded) for awards still in flight. Installed before the kit
+// starts so the button works whatever the kit's outcome.
+window.__wfFlushAwards = (timeoutMs) => flushAwards(timeoutMs);
 const banner = document.getElementById('kit-banner');
 function showBanner(text) { banner.textContent = text; banner.style.display = 'block'; }
 const start = await initKit();
@@ -261,6 +295,7 @@ if (start.kind === 'redirecting') {
   window.addEventListener('focus', check);
 }
 </script>
+<script src="progress-store.js"></script>
 <script>
 /* ============ DATA ============ */
 const PREFIXES = [
@@ -1035,10 +1070,15 @@ const STORIES=[
 let storiesUnlocked=0, correctTotal=0;
 /* Saved progress. Only the cumulative unlock state belongs here: score,
    streak and round are reset by setMode on purpose. Every access is
-   guarded, since localStorage throws outright in some privacy modes. */
+   guarded, since localStorage throws outright in some privacy modes.
+   A failed write marks progress unsaved (the Home Room button warns);
+   every later save retries the full snapshot (progress-store.js). */
 const PROGRESS_KEY="wordforge:progress";
+const progressSaver=WF_PROGRESS.createProgressSaver(()=>localStorage, PROGRESS_KEY);
 function saveProgress(){
-  try{ localStorage.setItem(PROGRESS_KEY, JSON.stringify({storiesUnlocked, correctTotal})); }catch(e){}
+  const ok=progressSaver.save({storiesUnlocked, correctTotal});
+  syncLeaveGuard();
+  return ok;
 }
 function loadProgress(){
   try{
@@ -1151,12 +1191,75 @@ const shuffle=a=>{a=a.slice();for(let i=a.length-1;i>0;i--){const j=Math.floor(M
 const pick=a=>a[Math.floor(Math.random()*a.length)];
 const meaningOf=(list,key)=>{const f=list.find(x=>x[0]===key);return f?f[1]:"";};
 
+/* ============ RETURN TO HOME ROOM ============ */
+/* Unsaved work is a half-built word in the Forge (picks placed, not yet
+   snapped) or progress whose last localStorage write failed. While there is
+   some, the browser's own leave prompt is armed; the button shows an in-page
+   dialog instead. With none, the button waits (at most 2 s) for awards still
+   in flight, then goes home. */
+const HOME_ROOM="https://class.travelschooling.com/";
+let leaveArmed=false, leaving=false, leaveReturnFocus=null;
+function wordHalfBuilt(){
+  return mode==="forge" && !answered && !!(forgePicks.prefix||forgePicks.stem||forgePicks.suffix);
+}
+function hasUnsavedWork(){ return wordHalfBuilt() || progressSaver.unsaved(); }
+function onBeforeUnload(e){ e.preventDefault(); e.returnValue=""; }
+function syncLeaveGuard(){
+  const want=!leaving && hasUnsavedWork();
+  if(want===leaveArmed) return;
+  leaveArmed=want;
+  if(want) window.addEventListener("beforeunload",onBeforeUnload);
+  else window.removeEventListener("beforeunload",onBeforeUnload);
+}
+async function goHome(){
+  leaving=true;
+  syncLeaveGuard();
+  const flush=window.__wfFlushAwards;
+  if(typeof flush==="function"){ try{ await flush(2000); }catch(e){} }
+  location.assign(HOME_ROOM);
+}
+function returnToHomeRoom(){
+  if(leaving) return;
+  if(progressSaver.unsaved()) saveProgress(); // one more try before asking
+  if(hasUnsavedWork()) openLeaveDialog(); else goHome();
+}
+function openLeaveDialog(){
+  const lines=[];
+  if(wordHalfBuilt()) lines.push("Your word is not finished. Finish it to keep it.");
+  if(progressSaver.unsaved()) lines.push("Your progress could not be saved on this device. If you leave now, it will be lost.");
+  const msg=$("leave-msg");
+  msg.textContent="";
+  lines.forEach(t=>{ const p=document.createElement("p"); p.textContent=t; msg.appendChild(p); });
+  leaveReturnFocus=$("home-room");
+  document.querySelector(".wrap").inert=true;
+  $("leave-overlay").hidden=false;
+  document.addEventListener("keydown",onLeaveKey,true);
+  $("leave-stay").focus();
+}
+function closeLeaveDialog(){
+  document.removeEventListener("keydown",onLeaveKey,true);
+  $("leave-overlay").hidden=true;
+  document.querySelector(".wrap").inert=false;
+  if(leaveReturnFocus) leaveReturnFocus.focus();
+}
+function onLeaveKey(e){
+  if(e.key==="Escape"){ e.preventDefault(); closeLeaveDialog(); return; }
+  if(e.key==="Tab"){ // keep focus on the dialog's two buttons
+    const stay=$("leave-stay"), go=$("leave-go");
+    const next = document.activeElement===stay ? go : stay;
+    e.preventDefault(); next.focus();
+  }
+}
+$("leave-stay").addEventListener("click",closeLeaveDialog);
+$("leave-go").addEventListener("click",()=>{ closeLeaveDialog(); goHome(); });
+
 function setMode(m){
   mode=m; round=0; score=0; streak=0;
   ["forge","decode","lexicon","cards","stories"].forEach(t=>$("tab-"+t).classList.toggle("active",t===m));
   $("scorebar").style.display = (m==="lexicon"||m==="cards"||m==="stories") ? "none":"flex";
   updateBar();
   if(m==="lexicon") renderLexicon(); else if(m==="cards") renderCards(); else if(m==="stories") renderStories(); else nextRound();
+  syncLeaveGuard();
 }
 function updateBar(){
   $("score").textContent=score; $("streak").textContent=streak;
@@ -1282,6 +1385,7 @@ function renderBank(){
     slot.querySelector(".sval").innerHTML=v||"&nbsp;";
     slot.onclick=v?()=>{if(!answered){forgePicks[t]=null;renderBank();}}:null;
   });
+  syncLeaveGuard();
 }
 function pickTile(i){
   if(answered)return;
@@ -1299,6 +1403,7 @@ function checkForge(){
   }
   const ok = (!current.needPrefix||forgePicks.prefix===w[1])&&forgePicks.stem===w[2]&&(!current.needSuffix||forgePicks.suffix===w[3]);
   markResult(ok);
+  syncLeaveGuard();
   if(ok){sndCorrect();celebrateAt($("stick"));window.__wfAward?.('word_forged',{word:w[0]});maybeUnlockStory();}else{sndWrong();}
   $("fb").className="feedback "+(ok?"good":"bad");
   $("fb").innerHTML=(ok?"🎉 SNAP! You built it! ":"💪 Good try! Peek at the answer — you\u2019ll crush it next time. ")+

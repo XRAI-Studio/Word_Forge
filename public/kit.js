@@ -84,19 +84,44 @@ export function sameAccount(kit, cookieHeader) {
   return sessionUserId(cookieHeader) === kit.user.id;
 }
 
+// Awards that have been sent and not yet answered. The Home Room button waits for them
+// (bounded) so an award fired just before leaving is not dropped by the navigation.
+const pendingAwards = new Set();
+
+/** How many awards are still in flight. */
+export function pendingAwardCount() {
+  return pendingAwards.size;
+}
+
+/**
+ * Resolves true once every in-flight award has settled, or false when `timeoutMs` passes
+ * first. Never rejects. Resolves at once when nothing is in flight.
+ */
+export function flushAwards(timeoutMs = 2000) {
+  if (pendingAwards.size === 0) return Promise.resolve(true);
+  let timer;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(false), timeoutMs);
+  });
+  const settled = Promise.allSettled([...pendingAwards]).then(() => true);
+  return Promise.race([settled, timeout]).finally(() => clearTimeout(timer));
+}
+
 /**
  * Fire-and-forget award, refused when the signed-in account changed under this tab
  * (the kit would credit the previous learner). `onMismatch` lets the page reload through
  * the gate so the kit starts fresh. The portal caps XP per event and per day, so a lost
- * call costs nothing.
+ * call costs nothing. The call is tracked until it settles (see flushAwards).
  */
 export function award(kit, event, detail, { cookie = () => document.cookie, onMismatch = () => {} } = {}) {
   if (!sameAccount(kit, cookie())) {
     onMismatch();
     return false;
   }
-  Promise.resolve()
+  const sent = Promise.resolve()
     .then(() => kit.award(event, detail))
-    .catch((err) => console.warn(`[kit] award ${event} failed:`, err && err.message ? err.message : err));
+    .catch((err) => console.warn(`[kit] award ${event} failed:`, err && err.message ? err.message : err))
+    .finally(() => pendingAwards.delete(sent));
+  pendingAwards.add(sent);
   return true;
 }

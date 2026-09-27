@@ -10,9 +10,12 @@ Rules:
   transpile or split the game.
 - `src/proxy.ts`, `src/lib/session.ts` and `src/lib/session-cookie.ts` are byte-identical
   to Factors' (the canonical copies); change them there first, then copy.
-- Kit hooks live only in `public/kit.js`, the module bootstrap in `index.html`, and the
-  three `window.__wfAward?.(...)` calls. Award only events present in the portal seed's
+- Kit hooks live only in `public/kit.js`, the module bootstrap in `index.html`, the
+  three `window.__wfAward?.(...)` calls and the Return to Home Room button's
+  `window.__wfFlushAwards` wait. Award only events present in the portal seed's
   `xp_events` for `wordforge` (`word_forged`, `story_unlocked`).
+- `public/progress-store.js` (saved-progress writer) is a plain helper script like
+  `sw-policy.js`, loaded with its own `<script>` tag and unit-tested; it is not a build step.
 - The worker caches a page only when `sw-policy.js` says so (200, not redirected, same
   origin); never cache the portal's login page.
 - `NEXT_PUBLIC_TS_KIT` is never set on Vercel; `NEXT_PUBLIC_SUPABASE_URL` must be.

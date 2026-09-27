@@ -9,7 +9,10 @@
  *      Playwright opens the game, waits for the kit bootstrap, and drives the two award
  *      paths through the game's own globals (the classic script declares them), checking
  *      the awards the mock recorded on window.__kitAwards, plus the 404s for repository
- *      files and the manifest link's credentials attribute.
+ *      files and the manifest link's credentials attribute. Then the Return to Home Room
+ *      button: a half-built word opens the leave dialog (Escape and "Stay and save" keep
+ *      the learner here); with the word cleared it goes to the portal (route intercepted)
+ *      with no beforeunload prompt.
  *
  *   npm run e2e            (needs `npx playwright install chromium` once)
  */
@@ -18,6 +21,7 @@ import net from "node:net";
 import { chromium, type Page } from "playwright";
 
 const PORTAL_LOGIN = "https://class.travelschooling.com/login?next=";
+const HOME_ROOM = "https://class.travelschooling.com/";
 const HEADERS: Record<string, string> = {
   "x-content-type-options": "nosniff",
   "referrer-policy": "strict-origin-when-cross-origin",
@@ -122,7 +126,7 @@ async function gateInProductionMode() {
     }
     log("production: /, a repository path and the manifest redirect to the portal login with the local origin in next=");
 
-    for (const asset of ["/sw.js", "/kit.js", "/sw-policy.js", "/fonts/nunito.woff2", "/icons/icon-192.png"]) {
+    for (const asset of ["/sw.js", "/kit.js", "/sw-policy.js", "/progress-store.js", "/fonts/nunito.woff2", "/icons/icon-192.png"]) {
       const res = await get(asset);
       expectEq(res.status, 200, `GET ${asset}`);
       checkHeaders(res, `GET ${asset}`);
@@ -136,13 +140,67 @@ async function gateInProductionMode() {
 // ---------------------------------------------------------------- part (b)
 
 type Award = { event: string; detail: Record<string, unknown> };
-type Win = Window & { __kitAwards?: Award[]; __wfAward?: unknown; checkForge?: () => void; maybeUnlockStory?: () => void };
+type Win = Window & {
+  __kitAwards?: Award[];
+  __wfAward?: unknown;
+  checkForge?: () => void;
+  maybeUnlockStory?: () => void;
+  setMode?: (m: string) => void;
+};
 // Top-level `let` bindings of the game's classic script, visible to evaluated code by name.
 declare const current: { w: string[] };
 declare const forgePicks: { prefix: string | null; stem: string | null; suffix: string | null };
 
 async function awards(page: Page): Promise<Award[]> {
   return page.evaluate(() => (window as unknown as Win).__kitAwards ?? []);
+}
+
+/** Return to Home Room: dialog while a word is half-built, straight home once it is not. */
+async function homeRoomButton(page: Page) {
+  const home = page.getByRole("button", { name: "Return to Home Room", exact: true });
+  expectEq(await home.isVisible(), true, "Return to Home Room button visible");
+
+  // The story unlocked above opens its modal ~0.9 s later; it covers the page, so close it.
+  await page.locator(".story-overlay .btn").click();
+  await page.locator(".story-overlay").waitFor({ state: "detached" });
+
+  // A fresh Forge round, then one tile snapped into a slot: a half-built word.
+  await page.evaluate(() => (window as unknown as Win).setMode!("forge"));
+  await page.locator("#bank .tile").first().click();
+
+  const dialog = page.getByRole("dialog");
+  await home.click();
+  await dialog.waitFor({ state: "visible" });
+  expectEq(await dialog.getAttribute("aria-modal"), "true", "dialog aria-modal");
+  expectEq(await page.getByRole("dialog", { name: "Not saved yet", exact: true }).isVisible(), true, "dialog is labelled by its heading");
+  const text = (await dialog.textContent()) ?? "";
+  expectEq(text.includes("Your word is not finished. Finish it to keep it."), true, "dialog says the word is not finished");
+  expectEq(await page.evaluate(() => document.activeElement?.id), "leave-stay", "focus moved into the dialog");
+
+  await page.keyboard.press("Escape");
+  await dialog.waitFor({ state: "hidden" });
+  expectEq(await page.evaluate(() => document.activeElement?.id), "home-room", "Escape returns focus to the button");
+
+  await home.click();
+  await dialog.waitFor({ state: "visible" });
+  await page.getByRole("button", { name: "Stay and save", exact: true }).click();
+  await dialog.waitFor({ state: "hidden" });
+  expectEq(await page.evaluate(() => document.activeElement?.id), "home-room", "Stay returns focus to the button");
+  expectEq(await page.locator("#stick .slot.filled").count(), 1, "staying keeps the half-built word");
+  log("dev: a half-built word opens the leave dialog; Escape and Stay keep the learner here");
+
+  // Clear the word: now the button goes home, with no beforeunload prompt on the way.
+  await page.getByRole("button", { name: "Clear", exact: true }).click();
+  const prompts: string[] = [];
+  page.on("dialog", (d) => {
+    prompts.push(d.type());
+    void d.dismiss();
+  });
+  await page.route(HOME_ROOM, (route) => route.fulfill({ status: 200, contentType: "text/html", body: "<!doctype html><title>Home Room</title>" }));
+  await Promise.all([page.waitForURL(HOME_ROOM, { timeout: 10_000 }), home.click()]);
+  expectEq(page.url(), HOME_ROOM, "Return to Home Room navigates to the portal");
+  expectEq(prompts.length, 0, `browser prompts on a clean leave: ${prompts.join(", ")}`);
+  log("dev: with nothing unsaved, Return to Home Room goes to the portal without a prompt");
 }
 
 async function gameInDevelopmentMode() {
@@ -194,6 +252,8 @@ async function gameInDevelopmentMode() {
     expectEq(forged.length, 1, "word_forged after a correct forge");
     expectEq(forged[0].detail.word, expectedWord, "word_forged names the word");
     log(`dev: word_forged for "${expectedWord}"`);
+
+    await homeRoomButton(page);
 
     expectEq(errors.length, 0, `page errors: ${errors.join(" | ")}`);
 

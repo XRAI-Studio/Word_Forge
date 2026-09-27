@@ -17,8 +17,8 @@
  */
 importScripts("sw-policy.js");
 
-const CACHE = "word-forge-v2";
-const OLD_CACHES = ["word-forge-v1"];
+const CACHE = "word-forge-v3";
+const OLD_CACHES = ["word-forge-v1", "word-forge-v2"];
 
 const SHELL = [
   "./",
@@ -26,6 +26,7 @@ const SHELL = [
   "./manifest.webmanifest",
   "./kit.js",
   "./sw-policy.js",
+  "./progress-store.js",
   "./fonts/baloo2.woff2",
   "./fonts/nunito.woff2",
   "./icons/icon-192.png",

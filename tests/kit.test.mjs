@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { award, initKit, isDevHost, mockKit, sameAccount, sessionUserId, GAME } from '../public/kit.js';
+import { award, flushAwards, initKit, isDevHost, mockKit, pendingAwardCount, sameAccount, sessionUserId, GAME } from '../public/kit.js';
 
 function jwt(sub) {
   const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
@@ -82,4 +82,55 @@ test('award refuses to credit a kit whose learner is no longer the signed-in one
   await new Promise((r) => setImmediate(r));
   assert.equal(sent.length, 1);
   assert.equal(mismatches, 2);
+});
+
+// The mock kit matches any cookie; pass one so award() does not read document.cookie.
+const MOCK_OPTS = { cookie: () => '' };
+
+test('flushAwards resolves at once when no award is in flight', async () => {
+  assert.equal(pendingAwardCount(), 0);
+  assert.equal(await flushAwards(10), true);
+});
+
+test('award tracks the call until it settles, and flushAwards waits for it', async () => {
+  let answer;
+  const kit = { mock: true, user: { id: 'dev' }, award: () => new Promise((r) => { answer = r; }) };
+  assert.equal(award(kit, 'word_forged', { word: 'x' }, MOCK_OPTS), true);
+  assert.equal(pendingAwardCount(), 1);
+  const flushed = flushAwards(2000);
+  setTimeout(() => answer({}), 20);
+  assert.equal(await flushed, true);
+  assert.equal(pendingAwardCount(), 0);
+});
+
+test('a failed award still settles and leaves the pending set', async () => {
+  const kit = { mock: true, user: { id: 'dev' }, award: async () => { throw new Error('offline'); } };
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    award(kit, 'word_forged', { word: 'x' }, MOCK_OPTS);
+    assert.equal(await flushAwards(2000), true);
+    assert.equal(pendingAwardCount(), 0);
+  } finally {
+    console.warn = warn;
+  }
+});
+
+test('flushAwards gives up after the timeout when an award hangs', async () => {
+  let answer;
+  const kit = { mock: true, user: { id: 'dev' }, award: () => new Promise((r) => { answer = r; }) };
+  award(kit, 'story_unlocked', { story: 1 }, MOCK_OPTS);
+  const started = Date.now();
+  assert.equal(await flushAwards(40), false);
+  assert.ok(Date.now() - started >= 30, 'waited for the timeout');
+  assert.equal(pendingAwardCount(), 1);
+  answer({});
+  assert.equal(await flushAwards(2000), true);
+  assert.equal(pendingAwardCount(), 0);
+});
+
+test('a refused award (account changed) is not tracked', async () => {
+  const kit = { user: { id: 'user-1' }, award: async () => ({}) };
+  assert.equal(award(kit, 'word_forged', {}, { cookie: () => cookieFor('user-2'), onMismatch: () => {} }), false);
+  assert.equal(pendingAwardCount(), 0);
 });
