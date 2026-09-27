@@ -13,6 +13,10 @@
  *   and it navigates whatever is unsaved.
  * - allowUnload(true) lets a reload the page itself ordered (account change) go through
  *   without the prompt; allowUnload(false) restores the protection.
+ * - The departure latch covers one attempt only: if the document is still here `stallMs`
+ *   after navigate() (the learner pressed Stop, or the navigation failed), the attempt is
+ *   over: the controls come back and the prompt is re-evaluated. Timers of older attempts
+ *   are ignored.
  * - A page restored from the back/forward cache (pageshow with persisted) is a live page
  *   again: the departure resets, the controls come back and the prompt is re-evaluated.
  */
@@ -23,6 +27,9 @@
     var win = opts.win;
     var hasUnsavedWork = opts.hasUnsavedWork;
     var setBusy = opts.setBusy || noop;
+    var schedule = opts.schedule || function (fn, ms) { return setTimeout(fn, ms); };
+    var stallMs = opts.stallMs == null ? 3000 : opts.stallMs;
+    var attempt = 0; // bumps on every departure and restore; a timer acts only for its own
     var armed = false;
     var departing = false; // a departure (clean or discard) is under way
     var discarding = false; // "Leave without saving": the prompt stays off
@@ -45,21 +52,38 @@
       return Promise.resolve().then(opts.flush).catch(noop);
     }
 
+    /** Ends the departure attempt: the page stays, so it is a live page again. */
+    function endDeparture() {
+      attempt++;
+      departing = false;
+      discarding = false;
+      setBusy(false);
+      sync();
+    }
+
+    /** Navigates, and ends this attempt if the document is still here after stallMs. */
+    function go(mine) {
+      opts.navigate();
+      schedule(function () {
+        if (mine === attempt && departing) endDeparture();
+      }, stallMs);
+      return true;
+    }
+
     /** Clean departure. Resolves true when it navigated, false when it was cancelled. */
     function depart() {
       if (departing) return Promise.resolve(false);
       departing = true;
+      var mine = ++attempt;
       setBusy(true);
       return flushed().then(function () {
+        if (mine !== attempt) return false; // restored meanwhile
         if (hasUnsavedWork()) {
-          departing = false;
-          setBusy(false);
-          sync();
+          endDeparture();
           opts.openDialog();
           return false;
         }
-        opts.navigate();
-        return true;
+        return go(mine);
       });
     }
 
@@ -68,11 +92,12 @@
       if (departing) return Promise.resolve(false);
       departing = true;
       discarding = true;
+      var mine = ++attempt;
       sync();
       setBusy(true);
       return flushed().then(function () {
-        opts.navigate();
-        return true;
+        if (mine !== attempt) return false; // restored meanwhile
+        return go(mine);
       });
     }
 
@@ -94,10 +119,7 @@
 
     win.addEventListener("pageshow", function (e) {
       if (!e.persisted) return;
-      departing = false;
-      discarding = false;
-      setBusy(false);
-      sync();
+      endDeparture();
     });
 
     return {

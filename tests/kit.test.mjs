@@ -227,3 +227,32 @@ test('account change: a stale stall timer from an earlier attempt is ignored', (
   assert.equal(log.banners.length, banners, 'no stalled banner over the retry');
   assert.equal(log.allow.at(-1), true, 'prompt still released for the retry');
 });
+
+test('leaving during a slow kit start-up waits for it under the same deadline', async () => {
+  let finishInit;
+  const TSKit = { init: () => new Promise((r) => { finishInit = r; }) };
+  const starting = initKit({ hostname: 'wordforge.travelschooling.com', TSKit });
+  assert.equal(pendingAwardCount(), 1, 'the start-up is tracked');
+  const flushed = flushAwards(2000);
+  let done = false;
+  flushed.then(() => { done = true; });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(done, false, 'waiting for the start-up');
+  finishInit({ user: { id: 'u1' }, award: async () => ({}) });
+  assert.equal((await starting).kind, 'ready');
+  assert.equal(await flushed, true);
+  assert.equal(pendingAwardCount(), 0);
+});
+
+test('a start-up that hangs is bounded by the deadline, and a failing one settles', async () => {
+  let finishInit;
+  const hang = { init: () => new Promise((r) => { finishInit = r; }) };
+  const starting = initKit({ hostname: 'wordforge.travelschooling.com', TSKit: hang });
+  assert.equal(await flushAwards(40), false, 'gave up at the deadline');
+  finishInit({ user: null });
+  assert.equal((await starting).kind, 'redirecting');
+  const failing = initKit({ hostname: 'wordforge.travelschooling.com', TSKit: { init: async () => { throw new Error('down'); } } });
+  await assert.rejects(failing);
+  assert.equal(await flushAwards(2000), true);
+  assert.equal(pendingAwardCount(), 0);
+});

@@ -36,8 +36,18 @@ export function mockKit(win) {
  * Resolves to { kind: 'ready', kit } | { kind: 'redirecting' } | { kind: 'unavailable' }.
  * 'redirecting': the real kit found no session and has already started navigating to
  * the portal login. 'unavailable': the kit script did not load.
+ *
+ * The start-up is tracked with the in-flight awards (see flushAwards): the kit may send
+ * work of its own while it starts, so the Home Room button waits for it too, under the
+ * same deadline.
  */
-export async function initKit({ hostname = location.hostname, TSKit = globalThis.TSKit, win = globalThis } = {}) {
+export function initKit(opts) {
+  const starting = startKit(opts);
+  track(starting.catch(() => undefined));
+  return starting;
+}
+
+async function startKit({ hostname = location.hostname, TSKit = globalThis.TSKit, win = globalThis } = {}) {
   if (isDevHost(hostname)) return { kind: 'ready', kit: mockKit(win) };
   if (!TSKit || typeof TSKit.init !== 'function') return { kind: 'unavailable' };
   const kit = await TSKit.init({ game: GAME });
@@ -84,9 +94,17 @@ export function sameAccount(kit, cookieHeader) {
   return sessionUserId(cookieHeader) === kit.user.id;
 }
 
-// Awards that have been sent and not yet answered. The Home Room button waits for them
-// (bounded) so an award fired just before leaving is not dropped by the navigation.
+// Awards that have been sent and not yet answered, and the kit's start-up while it runs.
+// The Home Room button waits for them (bounded) so work in flight just before leaving is
+// not dropped by the navigation.
 const pendingAwards = new Set();
+
+/** Tracks a never-rejecting promise until it settles. */
+function track(promise) {
+  const tracked = promise.finally(() => pendingAwards.delete(tracked));
+  pendingAwards.add(tracked);
+  return tracked;
+}
 
 /** How many awards are still in flight. */
 export function pendingAwardCount() {
@@ -124,11 +142,11 @@ export function award(kit, event, detail, { cookie = () => document.cookie, onMi
     onMismatch();
     return false;
   }
-  const sent = Promise.resolve()
-    .then(() => kit.award(event, detail))
-    .catch((err) => console.warn(`[kit] award ${event} failed:`, err && err.message ? err.message : err))
-    .finally(() => pendingAwards.delete(sent));
-  pendingAwards.add(sent);
+  track(
+    Promise.resolve()
+      .then(() => kit.award(event, detail))
+      .catch((err) => console.warn(`[kit] award ${event} failed:`, err && err.message ? err.message : err)),
+  );
   return true;
 }
 

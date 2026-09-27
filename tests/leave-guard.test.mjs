@@ -9,7 +9,7 @@ const { createLeaveGuard } = globalThis.WF_LEAVE;
 
 function setup({ unsaved = false, flush = () => undefined } = {}) {
   const win = new EventTarget();
-  const state = { unsaved, navigations: 0, dialogs: 0, requests: 0, busy: false, busyLog: [] };
+  const state = { unsaved, navigations: 0, dialogs: 0, requests: 0, busy: false, busyLog: [], timers: [] };
   const guard = createLeaveGuard({
     win,
     hasUnsavedWork: () => state.unsaved,
@@ -18,6 +18,7 @@ function setup({ unsaved = false, flush = () => undefined } = {}) {
     openDialog: () => { state.dialogs++; },
     beforeRequest: () => { state.requests++; },
     setBusy: (b) => { state.busy = b; state.busyLog.push(b); },
+    schedule: (fn, ms) => { state.timers.push({ fn, ms }); },
   });
   return { win, state, guard };
 }
@@ -170,4 +171,43 @@ test('allowUnload lets the page reload itself without the prompt, and can restor
   state.unsaved = false;
   guard.sync();
   assert.equal(unloadPrompted(win), false);
+});
+
+test('a cancelled clean departure (still here after 3 s) gives the page back', async () => {
+  const { state, guard } = setup();
+  assert.equal(await guard.request(), true);
+  assert.equal(state.timers.length, 1);
+  assert.equal(state.timers[0].ms, 3000);
+  assert.equal(await guard.request(), false, 'duplicate press during the attempt is ignored');
+  state.timers.shift().fn(); // the browser's Stop: the document is still here
+  assert.equal(guard.isDeparting(), false);
+  assert.equal(state.busy, false, 'controls back');
+  assert.equal(await guard.request(), true, 'the button works again');
+  assert.equal(state.navigations, 2);
+});
+
+test('a cancelled discard re-arms the prompt when work is still unsaved', async () => {
+  const { win, state, guard } = setup({ unsaved: true });
+  guard.sync();
+  assert.equal(await guard.discard(), true);
+  assert.equal(unloadPrompted(win), false);
+  state.timers.shift().fn();
+  assert.equal(guard.isDeparting(), false);
+  assert.equal(state.busy, false);
+  assert.equal(unloadPrompted(win), true, 'protection back for the unsaved word');
+  assert.equal(await guard.request(), false, 'the button asks again');
+  assert.equal(state.dialogs, 1);
+});
+
+test('a late stall timer from an older attempt does not end the current one', async () => {
+  const { win, state, guard } = setup();
+  await guard.request();
+  const old = state.timers.shift().fn;
+  pageshow(win, true); // Back: restored from the cache
+  await guard.request(); // leaving again
+  old(); // the first attempt's timer fires late
+  assert.equal(guard.isDeparting(), true, 'current attempt untouched');
+  assert.equal(state.busy, true);
+  state.timers.shift().fn();
+  assert.equal(guard.isDeparting(), false, 'its own timer ends it');
 });
