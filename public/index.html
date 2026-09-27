@@ -253,41 +253,49 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--sun);outline-of
 
 <!-- Portal kit (class standard rule 3): the kit script first, then a module that starts it
      and installs window.__wfAward for the game script below. On localhost kit.js supplies a
-     mock, so the game runs without a portal session. -->
+     mock, so the game runs without a portal session.
+     Local scripts carry ?v=<cache version> and are precached under exactly that URL (sw.js
+     SHELL): the page is network-first but scripts are cache-first, so an older worker must
+     never pair this page with its cached older copy of a script. Changing a script means
+     bumping its ?v= here, in SHELL and the worker's CACHE (tests/sw-policy.test.mjs). -->
 <div id="kit-banner" style="display:none;position:fixed;left:0;right:0;top:0;z-index:9999;padding:10px 16px;background:#1b1b1b;color:#fff;font:600 15px system-ui,sans-serif;text-align:center"></div>
 <script src="https://class.travelschooling.com/kit/v1/ts-kit.js"></script>
 <script type="module">
-import { initKit, award, sameAccount, flushAwards } from './kit.js';
+import { initKit, award, sameAccount, flushAwards, accountChangeRestart } from './kit.js?v=3';
 // The Home Room button waits (bounded) for awards still in flight. Installed before the kit
 // starts so the button works whatever the kit's outcome.
 window.__wfFlushAwards = (timeoutMs) => flushAwards(timeoutMs);
 const banner = document.getElementById('kit-banner');
-function showBanner(text) { banner.textContent = text; banner.style.display = 'block'; }
+function showBanner(text, action, label = 'Reload', testid = 'reload-kit') {
+  banner.textContent = text;
+  banner.style.display = 'block';
+  if (!action) return;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.dataset.testid = testid;
+  btn.textContent = label;
+  btn.style.cssText = 'margin-left:8px;padding:4px 10px;border-radius:999px;border:0;font:inherit';
+  btn.addEventListener('click', action);
+  banner.appendChild(btn);
+}
 const start = await initKit();
 if (start.kind === 'redirecting') {
   showBanner('Sending you to sign in…');
 } else if (start.kind === 'unavailable') {
-  showBanner('Could not reach the school portal. ');
-  const retry = document.createElement('button');
-  retry.type = 'button';
-  retry.dataset.testid = 'retry-kit';
-  retry.textContent = 'Try again';
-  retry.style.cssText = 'margin-left:8px;padding:4px 10px;border-radius:999px;border:0;font:inherit';
-  retry.addEventListener('click', () => location.reload());
-  banner.appendChild(retry);
+  showBanner('Could not reach the school portal. ', () => location.reload(), 'Try again', 'retry-kit');
 } else {
   const kit = start.kit;
   // The kit captured one learner's token at init: if the portal signs someone else in (or
-  // out) under this open tab, stop awarding and reload through the gate.
-  let restarting = false;
-  function restart() {
-    if (restarting) return;
-    restarting = true;
-    showBanner('The signed-in account changed. Reloading…');
-    location.reload();
-  }
+  // out) under this open tab, stop awarding and reload through the gate. The game's leave
+  // prompt is released for that reload (window.__wfAllowUnload, set by the game script).
+  const restarter = accountChangeRestart({
+    reload: () => location.reload(),
+    showBanner,
+    allowUnload: (on) => (typeof window.__wfAllowUnload === 'function' ? window.__wfAllowUnload(on) : false),
+  });
+  const restart = restarter.run;
   window.__wfAward = (event, detail) => {
-    if (restarting) return false;
+    if (restarter.isRestarting()) return false;
     return award(kit, event, detail, { onMismatch: restart });
   };
   const check = () => { if (!sameAccount(kit, document.cookie)) restart(); };
@@ -295,8 +303,8 @@ if (start.kind === 'redirecting') {
   window.addEventListener('focus', check);
 }
 </script>
-<script src="progress-store.js"></script>
-<script src="leave-guard.js"></script>
+<script src="progress-store.js?v=3"></script>
+<script src="leave-guard.js?v=3"></script>
 <script>
 /* ============ DATA ============ */
 const PREFIXES = [
@@ -1213,7 +1221,13 @@ const leaveGuard=WF_LEAVE.createLeaveGuard({
   navigate: ()=> location.assign(HOME_ROOM),
   openDialog: ()=> openLeaveDialog(),
   beforeRequest: ()=>{ if(progressSaver.unsaved()) saveProgress(); }, // one more try before asking
+  // While a departure waits for awards, the game's controls are off so no new work starts.
+  setBusy: (busy)=>{ document.querySelector(".wrap").inert=busy; },
 });
+/* Kit hook (module bootstrap): the account-change reload releases the leave prompt
+   (on=true) and restores it if the reload did not happen (on=false). Returns whether
+   unsaved work will be lost, so the banner can say so. */
+window.__wfAllowUnload=(on)=>{ leaveGuard.allowUnload(on); return hasUnsavedWork(); };
 function syncLeaveGuard(){ leaveGuard.sync(); }
 function returnToHomeRoom(){ leaveGuard.request(); }
 function openLeaveDialog(){
@@ -1244,7 +1258,7 @@ function onLeaveKey(e){
   }
 }
 $("leave-stay").addEventListener("click",closeLeaveDialog);
-$("leave-go").addEventListener("click",()=>{ closeLeaveDialog(); leaveGuard.leave(); });
+$("leave-go").addEventListener("click",()=>{ closeLeaveDialog(); leaveGuard.discard(); });
 
 function setMode(m){
   mode=m; round=0; score=0; streak=0;

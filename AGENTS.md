@@ -16,8 +16,11 @@ Rules:
   `xp_events` for `wordforge` (`word_forged`, `story_unlocked`).
 - `public/progress-store.js` (saved-progress writer) and `public/leave-guard.js` (Return to
   Home Room guard) are plain helper scripts like `sw-policy.js`, each loaded with its own
-  `<script>` tag and unit-tested; they are not a build step. New ones go in the worker's
-  `SHELL` too.
+  `<script>` tag and unit-tested; they are not a build step.
+- Page scripts (`kit.js`, `progress-store.js`, `leave-guard.js`) are loaded as `?v=<N>`
+  where N is the worker's `CACHE` version, and precached in `SHELL` under exactly that URL.
+  Changing one means bumping `CACHE` and every `?v=` together; `tests/sw-policy.test.mjs`
+  enforces it, so an older worker can never pair the new page with its cached old script.
 - The worker caches a page only when `sw-policy.js` says so (200, not redirected, same
   origin); never cache the portal's login page.
 - `NEXT_PUBLIC_TS_KIT` is never set on Vercel; `NEXT_PUBLIC_SUPABASE_URL` must be.

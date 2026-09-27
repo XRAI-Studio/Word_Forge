@@ -9,14 +9,15 @@ const { createLeaveGuard } = globalThis.WF_LEAVE;
 
 function setup({ unsaved = false, flush = () => undefined } = {}) {
   const win = new EventTarget();
-  const state = { unsaved, navigations: 0, dialogs: 0, requests: 0 };
+  const state = { unsaved, navigations: 0, dialogs: 0, requests: 0, busy: false, busyLog: [] };
   const guard = createLeaveGuard({
     win,
     hasUnsavedWork: () => state.unsaved,
-    flush: () => flush(),
+    flush: () => flush(state),
     navigate: () => { state.navigations++; },
     openDialog: () => { state.dialogs++; },
     beforeRequest: () => { state.requests++; },
+    setBusy: (b) => { state.busy = b; state.busyLog.push(b); },
   });
   return { win, state, guard };
 }
@@ -33,6 +34,8 @@ function pageshow(win, persisted) {
   e.persisted = persisted;
   win.dispatchEvent(e);
 }
+
+const tick = () => new Promise((r) => setImmediate(r));
 
 test('beforeunload is armed only while there is unsaved work', () => {
   const { win, state, guard } = setup();
@@ -55,20 +58,51 @@ test('the button with unsaved work opens the dialog and does not navigate', asyn
   assert.equal(state.dialogs, 1);
   assert.equal(state.navigations, 0);
   assert.equal(state.requests, 1, 'beforeRequest runs first (retry a failed save)');
+  assert.deepEqual(state.busyLog, [], 'controls untouched');
 });
 
-test('the button with nothing unsaved waits for the flush, then navigates once', async () => {
+test('a clean departure disables the controls, waits for the flush, then navigates once', async () => {
   let release;
   const { state, guard } = setup({ flush: () => new Promise((r) => { release = r; }) });
   const first = guard.request();
   const second = guard.request(); // double click during the departure
-  await new Promise((r) => setImmediate(r));
+  await tick();
+  assert.equal(state.busy, true, 'controls disabled during the wait');
   assert.equal(state.navigations, 0, 'waits for the flush');
   release();
   assert.equal(await first, true);
   assert.equal(await second, false);
   assert.equal(state.navigations, 1);
   assert.equal(state.dialogs, 0);
+});
+
+test('a clean departure is cancelled when work became unsaved during the wait (new word)', async () => {
+  let first = true;
+  const { win, state, guard } = setup({
+    // e.g. a tile snapped just before the controls locked (first departure only)
+    flush: (s) => { if (first) s.unsaved = true; first = false; },
+  });
+  assert.equal(await guard.request(), false);
+  assert.equal(state.navigations, 0, 'did not navigate');
+  assert.equal(state.dialogs, 1, 'opened the dialog instead');
+  assert.deepEqual(state.busyLog, [true, false], 'controls back');
+  assert.equal(unloadPrompted(win), true, 'the prompt protects the new work');
+  assert.equal(guard.isDeparting(), false);
+  // The learner finishes the word; the button works again.
+  state.unsaved = false;
+  assert.equal(await guard.request(), true);
+  assert.equal(state.navigations, 1);
+});
+
+test('a clean departure is cancelled when a progress write failed during the wait', async () => {
+  let failWrite;
+  const { state, guard } = setup({ flush: (s) => new Promise((r) => { failWrite = () => { s.unsaved = true; r(); }; }) });
+  const leaving = guard.request();
+  await tick();
+  failWrite();
+  assert.equal(await leaving, false);
+  assert.equal(state.navigations, 0);
+  assert.equal(state.dialogs, 1);
 });
 
 test('a flush that throws or rejects still navigates', async () => {
@@ -79,35 +113,39 @@ test('a flush that throws or rejects still navigates', async () => {
   assert.equal(a.state.navigations + b.state.navigations, 2);
 });
 
-test('leave without saving disarms the prompt first and stays disarmed while leaving', async () => {
+test('leave without saving disarms the prompt first and navigates whatever is unsaved', async () => {
   const { win, state, guard } = setup({ unsaved: true });
   guard.sync();
   assert.equal(unloadPrompted(win), true);
-  const left = guard.leave();
+  const left = guard.discard();
   assert.equal(unloadPrompted(win), false, 'disarmed before the navigation');
+  assert.equal(state.busy, true, 'controls disabled during the wait');
   guard.sync(); // a game re-render during the departure must not re-arm it
   assert.equal(unloadPrompted(win), false);
+  assert.equal(await guard.discard(), false, 'a second press is ignored');
   assert.equal(await left, true);
   assert.equal(state.navigations, 1);
+  assert.equal(state.dialogs, 0);
 });
 
 test('leave -> restore from the back/forward cache -> leave works again', async () => {
   const { win, state, guard } = setup();
   assert.equal(await guard.request(), true);
-  assert.equal(guard.isLeaving(), true);
+  assert.equal(guard.isDeparting(), true);
   assert.equal(await guard.request(), false, 'ignored while the departure is active');
   pageshow(win, false); // an ordinary load is not a restore
-  assert.equal(guard.isLeaving(), true);
+  assert.equal(guard.isDeparting(), true);
   pageshow(win, true);
-  assert.equal(guard.isLeaving(), false);
+  assert.equal(guard.isDeparting(), false);
+  assert.equal(state.busy, false, 'controls back after the restore');
   assert.equal(await guard.request(), true);
   assert.equal(state.navigations, 2);
 });
 
-test('a restore re-evaluates the prompt: no stale listener, re-armed only if work is unsaved', async () => {
+test('a restore after leave without saving re-evaluates the prompt: no stale listener, re-armed if unsaved', async () => {
   const { win, state, guard } = setup({ unsaved: true });
   guard.sync();
-  await guard.leave(); // "Leave without saving"
+  await guard.discard();
   assert.equal(unloadPrompted(win), false);
   state.unsaved = false;
   pageshow(win, true);
@@ -115,8 +153,21 @@ test('a restore re-evaluates the prompt: no stale listener, re-armed only if wor
   state.unsaved = true;
   guard.sync();
   assert.equal(unloadPrompted(win), true, 'live again: unsaved work arms it');
-  await guard.leave();
-  state.unsaved = true;
+  await guard.discard();
   pageshow(win, true);
   assert.equal(unloadPrompted(win), true, 'restored with the half-built word: armed again');
+});
+
+test('allowUnload lets the page reload itself without the prompt, and can restore it', () => {
+  const { win, state, guard } = setup({ unsaved: true });
+  guard.sync();
+  guard.allowUnload(true);
+  assert.equal(unloadPrompted(win), false);
+  guard.sync();
+  assert.equal(unloadPrompted(win), false, 'stays released');
+  guard.allowUnload(false);
+  assert.equal(unloadPrompted(win), true, 'protection back');
+  state.unsaved = false;
+  guard.sync();
+  assert.equal(unloadPrompted(win), false);
 });

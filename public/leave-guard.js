@@ -4,18 +4,29 @@
  *
  * - While the game reports unsaved work, a beforeunload listener is armed so the browser
  *   shows its own leave prompt; it is removed as soon as there is none (call sync()).
- * - request() is the button: unsaved work opens the in-page dialog; otherwise it leaves.
- * - leave() departs without asking: it disarms the prompt, waits for the flush (the caller
- *   bounds it) and navigates. A second press during a departure is ignored.
+ * - request() is the button: unsaved work opens the in-page dialog; otherwise a clean
+ *   departure. A second press during a departure is ignored.
+ * - A clean departure disables the game's controls (setBusy) while awards flush (the caller
+ *   bounds the flush), then checks again: if work became unsaved meanwhile (a new word, a
+ *   failed progress write) it cancels, re-enables the controls and opens the dialog.
+ * - discard() is "Leave without saving": an explicit discard, so the prompt is removed first
+ *   and it navigates whatever is unsaved.
+ * - allowUnload(true) lets a reload the page itself ordered (account change) go through
+ *   without the prompt; allowUnload(false) restores the protection.
  * - A page restored from the back/forward cache (pageshow with persisted) is a live page
- *   again: the departure latch resets and the prompt is re-evaluated.
+ *   again: the departure resets, the controls come back and the prompt is re-evaluated.
  */
 (function (root) {
+  function noop() {}
+
   function createLeaveGuard(opts) {
     var win = opts.win;
     var hasUnsavedWork = opts.hasUnsavedWork;
+    var setBusy = opts.setBusy || noop;
     var armed = false;
-    var leaving = false;
+    var departing = false; // a departure (clean or discard) is under way
+    var discarding = false; // "Leave without saving": the prompt stays off
+    var released = false; // allowUnload(true)
 
     function onBeforeUnload(e) {
       e.preventDefault();
@@ -23,53 +34,82 @@
     }
 
     function sync() {
-      var want = !leaving && !!hasUnsavedWork();
+      var want = !discarding && !released && !!hasUnsavedWork();
       if (want === armed) return;
       armed = want;
       if (want) win.addEventListener("beforeunload", onBeforeUnload);
       else win.removeEventListener("beforeunload", onBeforeUnload);
     }
 
-    /** Leaves without asking. Resolves true when it navigated, false when already leaving. */
-    function leave() {
-      if (leaving) return Promise.resolve(false);
-      leaving = true;
+    function flushed() {
+      return Promise.resolve().then(opts.flush).catch(noop);
+    }
+
+    /** Clean departure. Resolves true when it navigated, false when it was cancelled. */
+    function depart() {
+      if (departing) return Promise.resolve(false);
+      departing = true;
+      setBusy(true);
+      return flushed().then(function () {
+        if (hasUnsavedWork()) {
+          departing = false;
+          setBusy(false);
+          sync();
+          opts.openDialog();
+          return false;
+        }
+        opts.navigate();
+        return true;
+      });
+    }
+
+    /** "Leave without saving". Resolves true when it navigated, false when already leaving. */
+    function discard() {
+      if (departing) return Promise.resolve(false);
+      departing = true;
+      discarding = true;
       sync();
-      return Promise.resolve()
-        .then(opts.flush)
-        .catch(function () {})
-        .then(function () {
-          opts.navigate();
-          return true;
-        });
+      setBusy(true);
+      return flushed().then(function () {
+        opts.navigate();
+        return true;
+      });
     }
 
     /** The button press. Resolves true when it navigated. */
     function request() {
-      if (leaving) return Promise.resolve(false);
+      if (departing) return Promise.resolve(false);
       if (opts.beforeRequest) opts.beforeRequest();
       if (hasUnsavedWork()) {
         opts.openDialog();
         return Promise.resolve(false);
       }
-      return leave();
+      return depart();
+    }
+
+    function allowUnload(on) {
+      released = !!on;
+      sync();
     }
 
     win.addEventListener("pageshow", function (e) {
       if (!e.persisted) return;
-      leaving = false;
+      departing = false;
+      discarding = false;
+      setBusy(false);
       sync();
     });
 
     return {
       sync: sync,
       request: request,
-      leave: leave,
+      discard: discard,
+      allowUnload: allowUnload,
       isArmed: function () {
         return armed;
       },
-      isLeaving: function () {
-        return leaving;
+      isDeparting: function () {
+        return departing;
       },
     };
   }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { award, flushAwards, initKit, isDevHost, mockKit, pendingAwardCount, sameAccount, sessionUserId, GAME } from '../public/kit.js';
+import { accountChangeRestart, award, flushAwards, RESTART_LOSS_TEXT, RESTART_STALLED_TEXT, RESTART_TEXT, initKit, isDevHost, mockKit, pendingAwardCount, sameAccount, sessionUserId, GAME } from '../public/kit.js';
 
 function jwt(sub) {
   const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
@@ -169,4 +169,61 @@ test('successive awards share one deadline, not one each', async () => {
   answers[1]({});
   assert.equal(await flushAwards(2000), true);
   assert.equal(pendingAwardCount(), 0);
+});
+
+function restartHarness({ unsaved = false } = {}) {
+  const log = { reloads: 0, banners: [], allow: [], timers: [] };
+  const restart = accountChangeRestart({
+    reload: () => { log.reloads++; }, // a cancelled reload: the page stays
+    showBanner: (text, action) => { log.banners.push({ text, action }); },
+    allowUnload: (on) => { log.allow.push(on); return unsaved; },
+    schedule: (fn) => { log.timers.push(fn); },
+  });
+  return { log, restart };
+}
+
+test('account change: releases the leave prompt, says the word is lost, refuses awards and reloads once', () => {
+  const { log, restart } = restartHarness({ unsaved: true });
+  assert.equal(restart.isRestarting(), false);
+  restart.run();
+  restart.run(); // visibilitychange and focus can both fire
+  assert.equal(restart.isRestarting(), true);
+  assert.equal(log.reloads, 1);
+  assert.deepEqual(log.allow, [true]);
+  assert.equal(log.banners[0].text, RESTART_LOSS_TEXT);
+  assert.equal(log.banners[0].action, null);
+});
+
+test('account change with nothing unsaved just reloads', () => {
+  const { log, restart } = restartHarness();
+  restart.run();
+  assert.equal(log.banners[0].text, RESTART_TEXT);
+});
+
+test('account change: a cancelled reload restores the prompt and offers Reload, which retries', () => {
+  const { log, restart } = restartHarness({ unsaved: true });
+  restart.run();
+  log.timers.shift()(); // still here after the stall delay
+  assert.equal(restart.isRestarting(), true, 'awards still refused to the old account');
+  assert.deepEqual(log.allow, [true, false], 'leave prompt protection restored');
+  const stalled = log.banners.at(-1);
+  assert.equal(stalled.text, RESTART_STALLED_TEXT);
+  assert.equal(typeof stalled.action, 'function');
+  stalled.action(); // the learner presses Reload
+  assert.equal(log.reloads, 2);
+  assert.deepEqual(log.allow, [true, false, true]);
+  assert.equal(log.banners.at(-1).text, RESTART_LOSS_TEXT);
+  assert.equal(log.timers.length, 1, 'watching the retry too');
+});
+
+test('account change: a stale stall timer from an earlier attempt is ignored', () => {
+  const { log, restart } = restartHarness();
+  restart.run();
+  const firstTimer = log.timers.shift();
+  firstTimer(); // stalled
+  log.banners.at(-1).action(); // retry: reloading again
+  const banners = log.banners.length;
+  firstTimer(); // a late duplicate of the first attempt's timer
+  assert.equal(log.banners.length, banners, 'no stalled banner over the retry');
+  assert.equal(log.allow.at(-1), true, 'prompt still released for the retry');
 });

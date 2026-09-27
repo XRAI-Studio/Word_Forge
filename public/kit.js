@@ -131,3 +131,38 @@ export function award(kit, event, detail, { cookie = () => document.cookie, onMi
   pendingAwards.add(sent);
   return true;
 }
+
+export const RESTART_TEXT = 'The signed-in account changed. Reloading…';
+export const RESTART_LOSS_TEXT = 'The signed-in account changed. Reloading… Your unfinished word will not be kept.';
+export const RESTART_STALLED_TEXT = 'The signed-in account changed. Reload to keep playing.';
+
+/**
+ * Reload through the gate after the signed-in account changed under this tab. Awards stay
+ * refused from the first call on (isRestarting), since the kit holds the old learner.
+ *
+ * The page's own leave prompt must not stop this reload, so `allowUnload(true)` releases it
+ * first; it returns whether unsaved work will be lost, and the banner says so. If the page is
+ * still here after `stallMs` (the reload was cancelled or blocked), the prompt is restored
+ * (`allowUnload(false)`) and the banner offers a Reload control that runs the restart again.
+ *
+ * `showBanner(text, action)`: `action`, when given, is the Reload control's handler.
+ */
+export function accountChangeRestart({ reload, showBanner, allowUnload = () => false, schedule = setTimeout, stallMs = 3000 }) {
+  let state = 'idle'; // 'idle' | 'reloading' | 'stalled'
+  let attempt = 0;
+  function run() {
+    if (state === 'reloading') return;
+    state = 'reloading';
+    const mine = ++attempt;
+    const losing = allowUnload(true);
+    showBanner(losing ? RESTART_LOSS_TEXT : RESTART_TEXT, null);
+    reload();
+    schedule(() => {
+      if (state !== 'reloading' || mine !== attempt) return;
+      state = 'stalled';
+      allowUnload(false);
+      showBanner(RESTART_STALLED_TEXT, run);
+    }, stallMs);
+  }
+  return { run, isRestarting: () => state !== 'idle' };
+}
