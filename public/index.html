@@ -261,7 +261,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--sun);outline-of
 <div id="kit-banner" style="display:none;position:fixed;left:0;right:0;top:0;z-index:9999;padding:10px 16px;background:#1b1b1b;color:#fff;font:600 15px system-ui,sans-serif;text-align:center"></div>
 <script src="https://class.travelschooling.com/kit/v1/ts-kit.js"></script>
 <script type="module">
-import { initKit, award, sameAccount, flushAwards, accountChangeRestart } from './kit.js?v=3';
+import { initKit, award, sameAccount, flushAwards, accountChangeRestart } from './kit.js?v=4';
 // The Home Room button waits (bounded) for awards still in flight. Installed before the kit
 // starts so the button works whatever the kit's outcome.
 window.__wfFlushAwards = (timeoutMs) => flushAwards(timeoutMs);
@@ -303,8 +303,8 @@ if (start.kind === 'redirecting') {
   window.addEventListener('focus', check);
 }
 </script>
-<script src="progress-store.js?v=3"></script>
-<script src="leave-guard.js?v=3"></script>
+<script src="progress-store.js?v=4"></script>
+<script src="leave-guard.js?v=4"></script>
 <script>
 /* ============ DATA ============ */
 const PREFIXES = [

@@ -19,6 +19,7 @@ function setup({ unsaved = false, flush = () => undefined } = {}) {
     beforeRequest: () => { state.requests++; },
     setBusy: (b) => { state.busy = b; state.busyLog.push(b); },
     schedule: (fn, ms) => { state.timers.push({ fn, ms }); },
+    stop: () => { state.stops = (state.stops || 0) + 1; state.busyLog.push('stop'); },
   });
   return { win, state, guard };
 }
@@ -210,4 +211,42 @@ test('a late stall timer from an older attempt does not end the current one', as
   assert.equal(state.busy, true);
   state.timers.shift().fn();
   assert.equal(guard.isDeparting(), false, 'its own timer ends it');
+});
+
+test('the 3 s recovery cancels a slow navigation (stop) before giving the controls back', async () => {
+  const { win, state, guard } = setup({ unsaved: true });
+  guard.sync();
+  await guard.discard();
+  state.busyLog.length = 0;
+  const stopFirst = state.timers.shift().fn;
+  // Record the prompt state at the moment stop() runs.
+  const origStops = state.stops || 0;
+  stopFirst();
+  assert.equal(state.stops, origStops + 1, 'stop() called once');
+  assert.deepEqual(state.busyLog, ['stop', false], 'stop() before the controls come back');
+  assert.equal(unloadPrompted(win), true, 'prompt re-armed after the stop');
+});
+
+test('a late timer from an older attempt does not call stop()', async () => {
+  const { win, state, guard } = setup();
+  await guard.request();
+  const old = state.timers.shift().fn;
+  pageshow(win, true);
+  old();
+  assert.equal(state.stops || 0, 0);
+});
+
+test('without an injected stop, the recovery uses window.stop()', async () => {
+  const win = new EventTarget();
+  let stopped = 0;
+  win.stop = () => { stopped++; };
+  const timers = [];
+  const guard = createLeaveGuard({
+    win, hasUnsavedWork: () => false, flush: () => undefined, navigate: () => {},
+    openDialog: () => {}, schedule: (fn) => { timers.push(fn); },
+  });
+  await guard.request();
+  timers.shift()();
+  assert.equal(stopped, 1);
+  assert.equal(guard.isDeparting(), false);
 });

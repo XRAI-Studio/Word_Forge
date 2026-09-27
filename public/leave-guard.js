@@ -14,9 +14,10 @@
  * - allowUnload(true) lets a reload the page itself ordered (account change) go through
  *   without the prompt; allowUnload(false) restores the protection.
  * - The departure latch covers one attempt only: if the document is still here `stallMs`
- *   after navigate() (the learner pressed Stop, or the navigation failed), the attempt is
- *   over: the controls come back and the prompt is re-evaluated. Timers of older attempts
- *   are ignored.
+ *   after navigate() (the learner pressed Stop, the navigation failed, or it is merely
+ *   slow), the attempt is over: stop() first cancels any navigation still in flight, so a
+ *   word started afterwards cannot be lost when a slow navigation commits; then the
+ *   controls come back and the prompt is re-evaluated. Timers of older attempts are ignored.
  * - A page restored from the back/forward cache (pageshow with persisted) is a live page
  *   again: the departure resets, the controls come back and the prompt is re-evaluated.
  */
@@ -29,6 +30,7 @@
     var setBusy = opts.setBusy || noop;
     var schedule = opts.schedule || function (fn, ms) { return setTimeout(fn, ms); };
     var stallMs = opts.stallMs == null ? 3000 : opts.stallMs;
+    var stop = opts.stop || function () { if (typeof win.stop === "function") win.stop(); };
     var attempt = 0; // bumps on every departure and restore; a timer acts only for its own
     var armed = false;
     var departing = false; // a departure (clean or discard) is under way
@@ -65,7 +67,9 @@
     function go(mine) {
       opts.navigate();
       schedule(function () {
-        if (mine === attempt && departing) endDeparture();
+        if (mine !== attempt || !departing) return;
+        try { stop(); } catch (e) { /* nothing to cancel */ }
+        endDeparture();
       }, stallMs);
       return true;
     }

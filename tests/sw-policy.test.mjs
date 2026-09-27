@@ -69,23 +69,33 @@ function pageScripts(html) {
   return urls.map((u) => new URL(u, ORIGIN_ROOT)).filter((u) => u.origin === ORIGIN).map((u) => u.href);
 }
 
-// The word-forge-v2 worker's cache as installed browsers hold it: its SHELL (frozen at
-// 0d9b9bd), which is also everything the v2 page fetched at run time.
-const V2_CACHE = [
-  './', './index.html', './manifest.webmanifest', './kit.js', './sw-policy.js',
-  './fonts/baloo2.woff2', './fonts/nunito.woff2',
-  './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png',
-].map((p) => new URL(p, ORIGIN_ROOT).href);
+// Older workers' caches as installed browsers hold them: each one's SHELL (v2 frozen at
+// 0d9b9bd, v3 at 3fb30c4), which is also everything that version's page fetched at run time.
+const OLD_WORKER_CACHES = {
+  'word-forge-v2': [
+    './', './index.html', './manifest.webmanifest', './kit.js', './sw-policy.js',
+    './fonts/baloo2.woff2', './fonts/nunito.woff2',
+    './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png',
+  ],
+  'word-forge-v3': [
+    './', './index.html', './manifest.webmanifest',
+    './kit.js?v=3', './progress-store.js?v=3', './leave-guard.js?v=3', './sw-policy.js',
+    './fonts/baloo2.woff2', './fonts/nunito.woff2',
+    './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png',
+  ],
+};
 
-/** How the v2 worker answers a script request: caches.match (exact URL, query included), else network. */
-function v2Serves(url) {
-  return V2_CACHE.includes(url) ? 'v2-cache' : 'network';
+/** How an old worker answers a script request: caches.match (exact URL, query included), else network. */
+function oldWorkerServes(cache, url) {
+  return OLD_WORKER_CACHES[cache].map((p) => new URL(p, ORIGIN_ROOT).href).includes(url) ? 'old-cache' : 'network';
 }
 
-test('an old v2 worker never pairs the new page with a v2-cached script', async () => {
+test('an old v2 or v3 worker never pairs the new page with a script from its cache', async () => {
   const scripts = pageScripts(await source('index.html'));
   assert.ok(scripts.length >= 3, `found the page scripts: ${scripts.join(', ')}`);
-  for (const url of scripts) assert.equal(v2Serves(url), 'network', `${url} would come from the v2 cache`);
+  for (const cache of Object.keys(OLD_WORKER_CACHES)) {
+    for (const url of scripts) assert.equal(oldWorkerServes(cache, url), 'network', `${url} would come from ${cache}`);
+  }
 });
 
 test('every page script is versioned with the cache version and precached under that exact URL', async () => {
@@ -102,9 +112,9 @@ test('every page script is versioned with the cache version and precached under 
   }
 });
 
-test('sw.js: the cache is bumped past v2 and v2 is cleaned up', async () => {
+test('sw.js: the cache is bumped past v3 and every older cache is cleaned up', async () => {
   const src = await source('sw.js');
-  assert.match(src, /const CACHE = "word-forge-v3";/);
-  assert.match(src, /const OLD_CACHES = \["word-forge-v1", "word-forge-v2"\];/);
+  assert.match(src, /const CACHE = "word-forge-v4";/);
+  assert.match(src, /const OLD_CACHES = \["word-forge-v1", "word-forge-v2", "word-forge-v3"\];/);
   assert.ok(shellOf(src).includes(new URL('./sw-policy.js', ORIGIN_ROOT).href), 'the worker policy is precached');
 });
