@@ -296,6 +296,7 @@ if (start.kind === 'redirecting') {
 }
 </script>
 <script src="progress-store.js"></script>
+<script src="leave-guard.js"></script>
 <script>
 /* ============ DATA ============ */
 const PREFIXES = [
@@ -1196,33 +1197,25 @@ const meaningOf=(list,key)=>{const f=list.find(x=>x[0]===key);return f?f[1]:"";}
    snapped) or progress whose last localStorage write failed. While there is
    some, the browser's own leave prompt is armed; the button shows an in-page
    dialog instead. With none, the button waits (at most 2 s) for awards still
-   in flight, then goes home. */
+   in flight, then goes home. The arming, the departure latch and the
+   back/forward-cache reset live in leave-guard.js. */
 const HOME_ROOM="https://class.travelschooling.com/";
-let leaveArmed=false, leaving=false, leaveReturnFocus=null;
+let leaveReturnFocus=null;
 function wordHalfBuilt(){
   return mode==="forge" && !answered && !!(forgePicks.prefix||forgePicks.stem||forgePicks.suffix);
 }
 function hasUnsavedWork(){ return wordHalfBuilt() || progressSaver.unsaved(); }
-function onBeforeUnload(e){ e.preventDefault(); e.returnValue=""; }
-function syncLeaveGuard(){
-  const want=!leaving && hasUnsavedWork();
-  if(want===leaveArmed) return;
-  leaveArmed=want;
-  if(want) window.addEventListener("beforeunload",onBeforeUnload);
-  else window.removeEventListener("beforeunload",onBeforeUnload);
-}
-async function goHome(){
-  leaving=true;
-  syncLeaveGuard();
-  const flush=window.__wfFlushAwards;
-  if(typeof flush==="function"){ try{ await flush(2000); }catch(e){} }
-  location.assign(HOME_ROOM);
-}
-function returnToHomeRoom(){
-  if(leaving) return;
-  if(progressSaver.unsaved()) saveProgress(); // one more try before asking
-  if(hasUnsavedWork()) openLeaveDialog(); else goHome();
-}
+const leaveGuard=WF_LEAVE.createLeaveGuard({
+  win: window,
+  hasUnsavedWork,
+  // Kit hook (module bootstrap): bounded wait for in-flight awards; absent if the kit did not load.
+  flush: ()=> typeof window.__wfFlushAwards==="function" ? window.__wfFlushAwards(2000) : undefined,
+  navigate: ()=> location.assign(HOME_ROOM),
+  openDialog: ()=> openLeaveDialog(),
+  beforeRequest: ()=>{ if(progressSaver.unsaved()) saveProgress(); }, // one more try before asking
+});
+function syncLeaveGuard(){ leaveGuard.sync(); }
+function returnToHomeRoom(){ leaveGuard.request(); }
 function openLeaveDialog(){
   const lines=[];
   if(wordHalfBuilt()) lines.push("Your word is not finished. Finish it to keep it.");
@@ -1251,7 +1244,7 @@ function onLeaveKey(e){
   }
 }
 $("leave-stay").addEventListener("click",closeLeaveDialog);
-$("leave-go").addEventListener("click",()=>{ closeLeaveDialog(); goHome(); });
+$("leave-go").addEventListener("click",()=>{ closeLeaveDialog(); leaveGuard.leave(); });
 
 function setMode(m){
   mode=m; round=0; score=0; streak=0;

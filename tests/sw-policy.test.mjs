@@ -46,11 +46,11 @@ test('a non-200 response is not, and a missing response is not', () => {
   assert.equal(cacheablePage(res({ url: 'not a url' }), ORIGIN), false);
 });
 
-test('sw.js: kit.js is cache-first, so the Home Room change bumps the cache and precaches the progress writer', async () => {
+test('sw.js: kit.js is cache-first, so the Home Room change bumps the cache and precaches the helper scripts', async () => {
   const { readFile } = await import('node:fs/promises');
   const src = await readFile(new URL('../public/sw.js', import.meta.url), 'utf8');
   assert.match(src, /const CACHE = "word-forge-v3";/);
   assert.match(src, /const OLD_CACHES = \["word-forge-v1", "word-forge-v2"\];/);
   const shell = src.slice(src.indexOf('const SHELL = ['), src.indexOf('];', src.indexOf('const SHELL = [')));
-  for (const entry of ['./kit.js', './sw-policy.js', './progress-store.js']) assert.ok(shell.includes(`"${entry}"`), `SHELL has ${entry}`);
+  for (const entry of ['./kit.js', './sw-policy.js', './progress-store.js', './leave-guard.js']) assert.ok(shell.includes(`"${entry}"`), `SHELL has ${entry}`);
 });

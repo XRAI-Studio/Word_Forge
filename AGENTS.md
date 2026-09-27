@@ -14,8 +14,10 @@ Rules:
   three `window.__wfAward?.(...)` calls and the Return to Home Room button's
   `window.__wfFlushAwards` wait. Award only events present in the portal seed's
   `xp_events` for `wordforge` (`word_forged`, `story_unlocked`).
-- `public/progress-store.js` (saved-progress writer) is a plain helper script like
-  `sw-policy.js`, loaded with its own `<script>` tag and unit-tested; it is not a build step.
+- `public/progress-store.js` (saved-progress writer) and `public/leave-guard.js` (Return to
+  Home Room guard) are plain helper scripts like `sw-policy.js`, each loaded with its own
+  `<script>` tag and unit-tested; they are not a build step. New ones go in the worker's
+  `SHELL` too.
 - The worker caches a page only when `sw-policy.js` says so (200, not redirected, same
   origin); never cache the portal's login page.
 - `NEXT_PUBLIC_TS_KIT` is never set on Vercel; `NEXT_PUBLIC_SUPABASE_URL` must be.

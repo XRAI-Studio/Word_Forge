@@ -27,6 +27,7 @@ const SHELL = [
   "./kit.js",
   "./sw-policy.js",
   "./progress-store.js",
+  "./leave-guard.js",
   "./fonts/baloo2.woff2",
   "./fonts/nunito.woff2",
   "./icons/icon-192.png",

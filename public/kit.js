@@ -94,8 +94,10 @@ export function pendingAwardCount() {
 }
 
 /**
- * Resolves true once every in-flight award has settled, or false when `timeoutMs` passes
- * first. Never rejects. Resolves at once when nothing is in flight.
+ * Resolves true once the pending set is empty, or false when `timeoutMs` passes first.
+ * An award can start during the wait (a correct answer just before the press), so it drains
+ * successive snapshots of the set until none is left, all under the one deadline. Never
+ * rejects. Resolves at once when nothing is in flight.
  */
 export function flushAwards(timeoutMs = 2000) {
   if (pendingAwards.size === 0) return Promise.resolve(true);
@@ -103,8 +105,12 @@ export function flushAwards(timeoutMs = 2000) {
   const timeout = new Promise((resolve) => {
     timer = setTimeout(() => resolve(false), timeoutMs);
   });
-  const settled = Promise.allSettled([...pendingAwards]).then(() => true);
-  return Promise.race([settled, timeout]).finally(() => clearTimeout(timer));
+  const drained = (async () => {
+    // Each tracked promise removes itself before it settles, so this loop never spins.
+    while (pendingAwards.size > 0) await Promise.allSettled([...pendingAwards]);
+    return true;
+  })();
+  return Promise.race([drained, timeout]).finally(() => clearTimeout(timer));
 }
 
 /**

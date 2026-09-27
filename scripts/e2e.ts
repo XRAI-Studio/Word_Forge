@@ -126,7 +126,7 @@ async function gateInProductionMode() {
     }
     log("production: /, a repository path and the manifest redirect to the portal login with the local origin in next=");
 
-    for (const asset of ["/sw.js", "/kit.js", "/sw-policy.js", "/progress-store.js", "/fonts/nunito.woff2", "/icons/icon-192.png"]) {
+    for (const asset of ["/sw.js", "/kit.js", "/sw-policy.js", "/progress-store.js", "/leave-guard.js", "/fonts/nunito.woff2", "/icons/icon-192.png"]) {
       const res = await get(asset);
       expectEq(res.status, 200, `GET ${asset}`);
       checkHeaders(res, `GET ${asset}`);
