@@ -17,17 +17,17 @@
  */
 importScripts("sw-policy.js");
 
-const CACHE = "word-forge-v6";
-const OLD_CACHES = ["word-forge-v1", "word-forge-v2", "word-forge-v3", "word-forge-v4", "word-forge-v5"];
+const CACHE = "word-forge-v7";
+const OLD_CACHES = ["word-forge-v1", "word-forge-v2", "word-forge-v3", "word-forge-v4", "word-forge-v5", "word-forge-v6"];
 
 const SHELL = [
   "./",
   "./index.html",
   "./manifest.webmanifest",
   // Page scripts under the exact versioned URLs index.html uses (see the note there).
-  "./kit.js?v=6",
-  "./progress-store.js?v=6",
-  "./leave-guard.js?v=6",
+  "./kit.js?v=7",
+  "./progress-store.js?v=7",
+  "./leave-guard.js?v=7",
   "./sw-policy.js",
   "./fonts/baloo2.woff2",
   "./fonts/nunito.woff2",
