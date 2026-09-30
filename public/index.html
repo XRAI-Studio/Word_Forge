@@ -252,8 +252,9 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--sun);outline-of
 </div>
 
 <!-- Portal kit (class standard rule 3): the kit script first, then a module that starts it
-     and installs window.__wfAward for the game script below. On localhost kit.js supplies a
-     mock, so the game runs without a portal session.
+     and installs window.__wfAward and window.__wfPublish for the game script below (the
+     module runs after it, so the game's window.__wfProgress hook exists by then). On
+     localhost kit.js supplies a mock, so the game runs without a portal session.
      Local scripts carry ?v=<cache version> and are precached under exactly that URL (sw.js
      SHELL): the page is network-first but scripts are cache-first, so an older worker must
      never pair this page with its cached older copy of a script. Changing a script means
@@ -261,7 +262,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--sun);outline-of
 <div id="kit-banner" style="display:none;position:fixed;left:0;right:0;top:0;z-index:9999;padding:10px 16px;background:#1b1b1b;color:#fff;font:600 15px system-ui,sans-serif;text-align:center"></div>
 <script src="https://class.travelschooling.com/kit/v1/ts-kit.js"></script>
 <script type="module">
-import { initKit, award, sameAccount, flushAwards, accountChangeRestart } from './kit.js?v=5';
+import { initKit, award, sameAccount, flushAwards, accountChangeRestart, progressSync, trackPending } from './kit.js?v=6';
 // The Home Room button waits (bounded) for awards still in flight. Installed before the kit
 // starts so the button works whatever the kit's outcome.
 window.__wfFlushAwards = (timeoutMs) => flushAwards(timeoutMs);
@@ -278,6 +279,14 @@ function showBanner(text, action, label = 'Reload', testid = 'reload-kit') {
   btn.addEventListener('click', action);
   banner.appendChild(btn);
 }
+// Launcher tile: the game's saveProgress hands each snapshot here; it reaches the portal
+// once the start-up publish has begun (until then the start-up reads the game's counts).
+let tileSync = null;
+window.__wfPublish = (snapshot) => { tileSync?.publish(snapshot); };
+// Start-up is one tracked operation (R007): kit init, the first kit.load(), the merge into
+// the game's progress and the first publish, so the Home Room button waits for all of it
+// within its bounded deadline.
+async function startUp() {
 const start = await initKit();
 if (start.kind === 'redirecting') {
   showBanner('Sending you to sign in…');
@@ -301,10 +310,16 @@ if (start.kind === 'redirecting') {
   const check = () => { if (!sameAccount(kit, document.cookie)) restart(); };
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') check(); });
   window.addEventListener('focus', check);
+  if (window.__wfProgress) {
+    tileSync = progressSync(kit, window.__wfProgress, { onMismatch: restart, isRestarting: restarter.isRestarting });
+    await tileSync.start();
+  }
 }
+}
+await trackPending(startUp());
 </script>
-<script src="progress-store.js?v=5"></script>
-<script src="leave-guard.js?v=5"></script>
+<script src="progress-store.js?v=6"></script>
+<script src="leave-guard.js?v=6"></script>
 <script>
 /* ============ DATA ============ */
 const PREFIXES = [
@@ -929,7 +944,7 @@ const WORDS = [
 ["sector",null,"sect","-or","cut","a particular aspect of life or activity"],
 ["security","se-","curr","-ity","run apart","freedom from anxiety or fear"],
 ["sedative",null,"sed","-ive","sit","tending to soothe or tranquilize"],
-["seduce","se-","duc",null,"lead apart","induce to have sex"],
+["seduce","se-","duc",null,"lead apart","to lead aside"],
 ["select","se-","lect",null,"read apart","of superior grade"],
 ["selection","se-","lect","-ion","read apart","the act of choosing or selecting"],
 ["sensation",null,"sens","-ion","feel","someone who is dazzlingly skilled in any field"],
@@ -1081,22 +1096,43 @@ let storiesUnlocked=0, correctTotal=0;
    streak and round are reset by setMode on purpose. Every access is
    guarded, since localStorage throws outright in some privacy modes.
    A failed write marks progress unsaved (the Home Room button warns);
-   every later save retries the full snapshot (progress-store.js). */
-const PROGRESS_KEY="wordforge:progress";
+   every later save retries the full snapshot (progress-store.js).
+   Progress is per learner: the key carries the session cookie's user id
+   (`dev` on localhost), known synchronously here; the legacy unscoped
+   record is claimed once by the first learner (progress-store.js). With
+   no readable id, progress stays in memory only. Each save also goes to
+   the portal for the launcher tile (window.__wfPublish, set by the kit
+   module), which max-merges the server copy in at start-up through
+   window.__wfProgress below. */
+const LEARNER=WF_PROGRESS.learnerId(document.cookie, location.hostname);
+const PROGRESS_KEY=LEARNER ? WF_PROGRESS.progressKey(LEARNER) : null;
 const progressSaver=WF_PROGRESS.createProgressSaver(()=>localStorage, PROGRESS_KEY);
 function saveProgress(){
-  const ok=progressSaver.save({storiesUnlocked, correctTotal});
+  const snapshot={storiesUnlocked, correctTotal};
+  const ok=progressSaver.save(snapshot);
   syncLeaveGuard();
+  window.__wfPublish?.(snapshot);
   return ok;
 }
 function loadProgress(){
-  try{
-    const raw=localStorage.getItem(PROGRESS_KEY); if(!raw) return;
-    const saved=JSON.parse(raw);
-    storiesUnlocked=Math.max(0, Math.min(STORIES.length, saved.storiesUnlocked|0));
-    correctTotal=Math.max(0, saved.correctTotal|0);
-  }catch(e){}
+  const saved=WF_PROGRESS.loadLearnerProgress(()=>localStorage, LEARNER, STORIES.length);
+  storiesUnlocked=saved.storiesUnlocked;
+  correctTotal=saved.correctTotal;
 }
+/* Kit hook (module bootstrap): read the in-memory counts, and store the
+   max-merge with the server copy (it only ever raises them). */
+window.__wfProgress={
+  learner: LEARNER,
+  storyCount: STORIES.length,
+  get: ()=>({storiesUnlocked, correctTotal}),
+  set: (p)=>{
+    storiesUnlocked=p.storiesUnlocked;
+    correctTotal=p.correctTotal;
+    updateStoryCount();
+    if(mode==="stories") renderStories();
+    saveProgress();
+  },
+};
 function updateStoryCount(){ $("story-count").textContent = storiesUnlocked?("("+storiesUnlocked+")"):""; }
 function maybeUnlockStory(){
   correctTotal++;

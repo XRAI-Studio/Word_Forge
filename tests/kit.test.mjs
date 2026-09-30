@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { accountChangeRestart, award, flushAwards, RESTART_LOSS_TEXT, RESTART_STALLED_TEXT, RESTART_TEXT, initKit, isDevHost, mockKit, pendingAwardCount, sameAccount, sessionUserId, GAME } from '../public/kit.js';
+import { accountChangeRestart, award, createPublisher, flushAwards, mergeProgress, progressSummary, progressSync, RESTART_LOSS_TEXT, RESTART_STALLED_TEXT, RESTART_TEXT, initKit, isDevHost, mockKit, pendingAwardCount, sameAccount, sessionUserId, trackPending, GAME } from '../public/kit.js';
 
 function jwt(sub) {
   const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
@@ -255,4 +255,303 @@ test('a start-up that hangs is bounded by the deadline, and a failing one settle
   await assert.rejects(failing);
   assert.equal(await flushAwards(2000), true);
   assert.equal(pendingAwardCount(), 0);
+});
+
+// ---- launcher tile (work order 2026-09-30-tile-summaries-and-copy) ----
+
+/**
+ * The portal side of `save_progress` / `game_progress`: a save whose rev is lower than the
+ * stored state's rev is dropped and answers false (0007_progress_revision_guard.sql).
+ */
+function fakePortal() {
+  return {
+    row: null,
+    offline: false,
+    saveCalls: 0,
+    async select() {
+      if (this.offline) throw new Error('network');
+      return this.row ? [structuredClone(this.row)] : [];
+    },
+    async saveProgress({ p_state, p_summary, p_rev }) {
+      this.saveCalls++;
+      if (this.offline) throw new Error('network');
+      const stored = this.row && typeof this.row.state.rev === 'number' ? this.row.state.rev : 0;
+      if (this.row && p_rev < stored) return false;
+      this.row = { state: structuredClone(p_state), summary: structuredClone(p_summary) };
+      return true;
+    },
+  };
+}
+
+/**
+ * A port of ts-kit.js's load / save / flush (public/kit/v1/ts-kit.js lines 74-100) with a
+ * shorter debounce: save() replaces the pending snapshot and cancels the earlier timer
+ * without settling the earlier call's promise; flush settles when the server answered
+ * (dropped or not) and marks the cache dirty on failure; load() prefers a dirty local cache,
+ * then the server, then the local cache.
+ */
+function fakeKit(portal, storage = new Map(), { debounceMs = 5, userId = 'u1' } = {}) {
+  const cacheKey = `tskit:wordforge:${userId}`;
+  const ls = (val) => {
+    if (val === undefined) return storage.has(cacheKey) ? structuredClone(storage.get(cacheKey)) : null;
+    storage.set(cacheKey, structuredClone(val));
+  };
+  let saveTimer = null;
+  let pending = null;
+  const calls = { save: 0 };
+  function flush() {
+    if (!pending) return Promise.resolve();
+    const p = pending; pending = null;
+    const rev = p.state && typeof p.state.rev === 'number' ? p.state.rev : 0;
+    return portal.saveProgress({ p_state: p.state, p_summary: p.summary, p_rev: rev })
+      .then(() => { ls({ state: p.state, summary: p.summary }); })
+      .catch(() => { ls({ state: p.state, summary: p.summary, dirty: true }); });
+  }
+  return {
+    user: { id: userId },
+    calls,
+    load() {
+      return portal.select().then((rows) => {
+        const server = rows && rows[0]; const local = ls();
+        if (local && local.dirty) return local.state;
+        if (server) { ls({ state: server.state, summary: server.summary }); return server.state; }
+        return local ? local.state : {};
+      }).catch(() => { const local = ls(); return local ? local.state : {}; });
+    },
+    save(state, summary) {
+      calls.save++;
+      pending = { state, summary: summary || {} };
+      ls({ state, summary: summary || {}, dirty: true });
+      if (saveTimer) clearTimeout(saveTimer);
+      return new Promise((resolve) => { saveTimer = setTimeout(() => { flush().then(resolve, resolve); }, debounceMs); });
+    },
+    award: async () => ({}),
+  };
+}
+
+/** A private pending-work set, so these tests do not touch the module's own. */
+const localTrack = () => {
+  const set = new Set();
+  const track = (p) => {
+    const t = Promise.resolve(p).then(() => undefined, () => undefined).finally(() => set.delete(t));
+    set.add(t);
+    return p;
+  };
+  return { set, track };
+};
+const idle = async (set) => { while (set.size) await Promise.allSettled([...set]); };
+
+/** The game's window.__wfProgress, over plain counters. */
+function gameHook(start = { storiesUnlocked: 0, correctTotal: 0 }, learner = 'u1') {
+  let p = { ...start };
+  const sets = [];
+  return {
+    learner,
+    storyCount: 18,
+    get: () => ({ ...p }),
+    set: (next) => { p = { ...next }; sets.push({ ...next }); },
+    answer() { p.correctTotal++; if (p.correctTotal % 3 === 0 && p.storiesUnlocked < 18) p.storiesUnlocked++; return { ...p }; },
+    sets,
+  };
+}
+
+test('progressSummary: words forged and stories of the total, singular for one word', () => {
+  assert.deepEqual(progressSummary({ storiesUnlocked: 0, correctTotal: 1 }, 18), { headline: '1 word forged · 0 of 18 stories', percent: 0 });
+  assert.deepEqual(progressSummary({ storiesUnlocked: 1, correctTotal: 3 }, 18), { headline: '3 words forged · 1 of 18 stories', percent: 6 });
+  assert.deepEqual(progressSummary({ storiesUnlocked: 0, correctTotal: 0 }, 18), { headline: '0 words forged · 0 of 18 stories', percent: 0 });
+  assert.deepEqual(progressSummary({ storiesUnlocked: 18, correctTotal: 60 }, 18), { headline: '60 words forged · 18 of 18 stories', percent: 100 });
+});
+
+test('mergeProgress: field-wise max; non-numeric server values count as 0; stories capped', () => {
+  assert.deepEqual(mergeProgress({ storiesUnlocked: 1, correctTotal: 4 }, { storiesUnlocked: 2, correctTotal: 7 }), { storiesUnlocked: 2, correctTotal: 7 });
+  assert.deepEqual(mergeProgress({ storiesUnlocked: 2, correctTotal: 7 }, { storiesUnlocked: 1, correctTotal: 4 }), { storiesUnlocked: 2, correctTotal: 7 });
+  assert.deepEqual(mergeProgress({ storiesUnlocked: 1, correctTotal: 4 }, {}), { storiesUnlocked: 1, correctTotal: 4 });
+  assert.deepEqual(mergeProgress({ storiesUnlocked: 1, correctTotal: 4 }, { storiesUnlocked: '9', correctTotal: 'lots', rev: 99 }), { storiesUnlocked: 1, correctTotal: 4 });
+  assert.deepEqual(mergeProgress({ storiesUnlocked: 0, correctTotal: 0 }, { storiesUnlocked: 40, correctTotal: 2.7 }, 18), { storiesUnlocked: 18, correctTotal: 2 });
+  assert.deepEqual(mergeProgress(null, null), { storiesUnlocked: 0, correctTotal: 0 });
+});
+
+test('createPublisher never calls kit.save while an earlier call is unsettled; rapid requests end with the newest snapshot saved', async () => {
+  const portal = fakePortal();
+  const kit = fakeKit(portal);
+  const { set, track } = localTrack();
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const pub = createPublisher(async (n) => {
+    inFlight++;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    try {
+      await kit.save({ rev: n, n }, { headline: `n=${n}` });
+    } finally {
+      inFlight--;
+    }
+  }, { track });
+  const done = [];
+  for (let n = 1; n <= 6; n++) {
+    done.push(pub.request(n));
+    assert.ok(set.size <= 1, 'only the run is tracked');
+    await new Promise((r) => setTimeout(r, 1));
+  }
+  await Promise.all(done);
+  await idle(set);
+  assert.equal(maxInFlight, 1);
+  assert.equal(portal.row.state.n, 6, 'the newest snapshot reached the server');
+  assert.equal(set.size, 0, 'nothing left pending');
+  assert.equal(pub.busy(), false);
+  assert.ok(kit.calls.save < 6, 'requests during a run were coalesced');
+});
+
+test('createPublisher: a failing publish still settles the run and clears the pending set', async () => {
+  const { set, track } = localTrack();
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    const pub = createPublisher(async () => { throw new Error('boom'); }, { track });
+    await pub.request(1);
+    await idle(set);
+    assert.equal(set.size, 0);
+    assert.equal(pub.busy(), false);
+  } finally {
+    console.warn = warn;
+  }
+});
+
+test('progressSync start-up: existing local progress reaches the tile with no play, rev = correctTotal', async () => {
+  const portal = fakePortal();
+  const kit = fakeKit(portal);
+  const hook = gameHook({ storiesUnlocked: 1, correctTotal: 4 });
+  const { set, track } = localTrack();
+  const sync = progressSync(kit, hook, { cookie: () => cookieFor('u1'), track });
+  await sync.start();
+  await idle(set);
+  assert.deepEqual(portal.row.state, { rev: 4, storiesUnlocked: 1, correctTotal: 4 });
+  assert.deepEqual(portal.row.summary, { headline: '4 words forged · 1 of 18 stories', percent: 6 });
+  assert.equal(portal.saveCalls, 1, 'published once');
+});
+
+test('progressSync start-up: the server copy only raises the counts; a device with fewer answers never lowers it', async () => {
+  const portal = fakePortal();
+  portal.row = { state: { rev: 9, storiesUnlocked: 3, correctTotal: 9 }, summary: {} };
+  const kit = fakeKit(portal);
+  const hook = gameHook({ storiesUnlocked: 1, correctTotal: 4 });
+  const { set, track } = localTrack();
+  const sync = progressSync(kit, hook, { cookie: () => cookieFor('u1'), track });
+  await sync.start();
+  await idle(set);
+  assert.deepEqual(hook.get(), { storiesUnlocked: 3, correctTotal: 9 }, 'merged into the game');
+  assert.deepEqual(hook.sets.at(-1), { storiesUnlocked: 3, correctTotal: 9 }, 'stored through the hook');
+  assert.equal(portal.row.state.correctTotal, 9);
+  // A stale snapshot from before the merge (a lower rev) is dropped by the server.
+  sync.publish({ storiesUnlocked: 1, correctTotal: 5 });
+  await idle(set);
+  assert.deepEqual(portal.row.state, { rev: 9, storiesUnlocked: 3, correctTotal: 9 });
+  assert.equal(portal.row.summary.headline, '9 words forged · 3 of 18 stories');
+});
+
+test('progressSync: answers made while the first load is out count, and are published once after it', async () => {
+  const portal = fakePortal();
+  portal.row = { state: { rev: 2, storiesUnlocked: 0, correctTotal: 2 }, summary: {} };
+  const kit = fakeKit(portal);
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const load = kit.load.bind(kit);
+  kit.load = () => gate.then(load);
+  const hook = gameHook();
+  const { set, track } = localTrack();
+  const sync = progressSync(kit, hook, { cookie: () => cookieFor('u1'), track });
+  const started = track(sync.start()); // index.html tracks the whole start-up
+  sync.publish(hook.answer()); // before the start-up publish: the start-up reads the counts itself
+  sync.publish(hook.answer());
+  sync.publish(hook.answer());
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(portal.saveCalls, 0, 'nothing published before the first load resolved');
+  assert.equal(set.size, 1, 'the start-up is pending work');
+  release();
+  await started;
+  await idle(set);
+  assert.deepEqual(hook.get(), { storiesUnlocked: 1, correctTotal: 3 }, 'max(3 in memory, 2 on the server)');
+  assert.equal(portal.saveCalls, 1);
+  assert.equal(portal.row.summary.headline, '3 words forged · 1 of 18 stories');
+  // After the start-up publish, each save goes straight through the publisher.
+  sync.publish(hook.answer());
+  await idle(set);
+  assert.equal(portal.row.summary.headline, '4 words forged · 1 of 18 stories');
+});
+
+test('progressSync: a load failure publishes the in-memory counts only; nothing to publish for a new learner', async () => {
+  const portal = fakePortal();
+  const kit = fakeKit(portal);
+  kit.load = async () => { throw new Error('network'); };
+  const { set, track } = localTrack();
+  const sync = progressSync(kit, gameHook({ storiesUnlocked: 0, correctTotal: 2 }), { cookie: () => cookieFor('u1'), track });
+  await sync.start();
+  await idle(set);
+  assert.equal(portal.row.summary.headline, '2 words forged · 0 of 18 stories');
+
+  const empty = fakePortal();
+  const fresh = progressSync(fakeKit(empty), gameHook(), { cookie: () => cookieFor('u1'), track });
+  await fresh.start();
+  await idle(set);
+  assert.equal(empty.saveCalls, 0, 'the tile stays "Not started" until the first answer');
+});
+
+test('progressSync refuses to save for a learner who is no longer signed in, or when the page belongs to another learner', async () => {
+  const portal = fakePortal();
+  const kit = fakeKit(portal);
+  const { set, track } = localTrack();
+  let mismatches = 0;
+  let cookie = cookieFor('u1');
+  const hook = gameHook({ storiesUnlocked: 0, correctTotal: 1 });
+  const sync = progressSync(kit, hook, { cookie: () => cookie, onMismatch: () => { mismatches++; }, track });
+  await sync.start();
+  await idle(set);
+  assert.equal(portal.row.summary.headline, '1 word forged · 0 of 18 stories');
+  cookie = cookieFor('u2');
+  sync.publish(hook.answer());
+  await idle(set);
+  assert.equal(mismatches, 1);
+  assert.equal(portal.row.summary.headline, '1 word forged · 0 of 18 stories', 'nothing saved for the previous learner');
+
+  // The page loaded u2's local progress but the kit started as u1: nothing is merged or saved.
+  const other = fakePortal();
+  const wrong = progressSync(fakeKit(other), gameHook({ storiesUnlocked: 1, correctTotal: 5 }, 'u2'), { cookie: () => cookieFor('u1'), onMismatch: () => { mismatches++; }, track });
+  await wrong.start();
+  await idle(set);
+  assert.equal(mismatches, 2);
+  assert.equal(other.saveCalls, 0);
+});
+
+test('progressSync: nothing is published while the account-change restart runs', async () => {
+  const portal = fakePortal();
+  const { set, track } = localTrack();
+  const sync = progressSync(fakeKit(portal), gameHook({ storiesUnlocked: 0, correctTotal: 1 }), { cookie: () => cookieFor('u1'), isRestarting: () => true, track });
+  await sync.start();
+  await idle(set);
+  assert.equal(portal.saveCalls, 0);
+});
+
+test('trackPending: a tracked start-up holds flushAwards until it settles, a rejection included', async () => {
+  let fail;
+  const startUp = new Promise((_, reject) => { fail = reject; });
+  startUp.catch(() => {});
+  assert.equal(trackPending(startUp), startUp, 'returns the promise unchanged');
+  assert.equal(pendingAwardCount(), 1);
+  let flushed = null;
+  const flush = flushAwards(5000).then((v) => { flushed = v; });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(flushed, null);
+  fail(new Error('portal down'));
+  await flush;
+  assert.equal(flushed, true);
+  assert.equal(pendingAwardCount(), 0);
+});
+
+test('mockKit: load returns {} until a save, saves are recorded, a lower rev is dropped', async () => {
+  const win = {};
+  const kit = mockKit(win);
+  assert.deepEqual(await kit.load(), {});
+  await kit.save({ rev: 4, storiesUnlocked: 1, correctTotal: 4 }, { headline: '4 words forged · 1 of 18 stories', percent: 6 });
+  await kit.save({ rev: 2, storiesUnlocked: 0, correctTotal: 2 }, { headline: '2 words forged · 0 of 18 stories', percent: 0 });
+  assert.deepEqual(await kit.load(), { rev: 4, storiesUnlocked: 1, correctTotal: 4 });
+  assert.deepEqual(win.__kitSaves.map((s) => s.summary.headline), ['4 words forged · 1 of 18 stories', '2 words forged · 0 of 18 stories']);
 });

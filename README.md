@@ -63,6 +63,16 @@ portal caps them per event and per day):
 | `word_forged` | a correct forge, or a correct decode answer (a decode counts as a forged word; the seed has no separate event) |
 | `story_unlocked` | a story unlocks (every third correct answer) |
 
+Launcher tile: saved progress (`{ storiesUnlocked, correctTotal }`) stays in `localStorage`
+as the working store, under `wordforge:progress:<userId>` (the session cookie's `sub`, `dev`
+on localhost; an old unscoped `wordforge:progress` is claimed once by the first learner to
+open the game on that browser, then removed). Each save is also published with
+`kit.save()` through one serialized publisher (`public/kit.js`), with
+`rev = correctTotal`, so the tile reads "N words forged · S of 18 stories" and a device with
+fewer answers never lowers it. At start-up (one tracked operation with kit init, so Return
+to Home Room waits for it) the server copy is max-merged into the game's counts and
+published once, so existing progress reaches the tile with no play.
+
 ## Run it locally
 
 ```
@@ -75,7 +85,8 @@ npm run build
 ```
 
 On `localhost` the page gate lets everything through and `public/kit.js` returns a mock kit
-that records awards on `window.__kitAwards`; the e2e reads them.
+that records awards on `window.__kitAwards` and saves on `window.__kitSaves` (keeping one
+stored state in memory); the e2e reads them.
 
 ## Deploy
 

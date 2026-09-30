@@ -13,16 +13,32 @@ export function isDevHost(hostname) {
 
 const EMPTY_AWARD = { awarded_xp: 0, xp: 0, gems: 0, level: 1, streak: 0, level_up: false, new_achievements: [] };
 
-/** A kit that records awards on window.__kitAwards instead of calling the portal. */
+const clone = (v) => (v === undefined ? v : JSON.parse(JSON.stringify(v)));
+
+/**
+ * A kit that records awards on window.__kitAwards and saves on window.__kitSaves instead of
+ * calling the portal. It keeps one stored state in memory (load returns `{}` until a save),
+ * and drops a save whose rev is lower than the stored one, as `save_progress` does.
+ * `win.__kitLoadGate` (e2e): a promise every load waits for, to hold the first load open.
+ */
 export function mockKit(win) {
   const awards = (win.__kitAwards = win.__kitAwards || []);
+  const saves = (win.__kitSaves = win.__kitSaves || []);
+  let stored = null;
+  const revOf = (state) => (state && typeof state.rev === 'number' ? state.rev : 0);
   return {
     mock: true,
     user: { id: 'dev', displayName: 'Dev Learner', role: 'student' },
     totals: { xp: 0, gems: 0, level: 1, streak: 0 },
     launcherUrl: 'https://class.travelschooling.com',
-    load: async () => ({}),
-    save: async () => undefined,
+    load: async () => {
+      if (win.__kitLoadGate) await win.__kitLoadGate;
+      return stored ? clone(stored) : {};
+    },
+    save: async (state, summary = {}) => {
+      saves.push(clone({ state, summary }));
+      if (!stored || revOf(state) >= revOf(stored)) stored = clone(state);
+    },
     award: async (event, detail = {}) => {
       awards.push({ event, detail });
       return { ...EMPTY_AWARD };
@@ -106,6 +122,15 @@ function track(promise) {
   return tracked;
 }
 
+/**
+ * Tracks any promise (a rejection counts as settled) so flushAwards waits for it; returns
+ * `promise` unchanged. index.html tracks its whole start-up with it (R007).
+ */
+export function trackPending(promise) {
+  track(Promise.resolve(promise).then(() => undefined, () => undefined));
+  return promise;
+}
+
 /** How many awards are still in flight. */
 export function pendingAwardCount() {
   return pendingAwards.size;
@@ -183,4 +208,119 @@ export function accountChangeRestart({ reload, showBanner, allowUnload = () => f
     }, stallMs);
   }
   return { run, isRestarting: () => state !== 'idle' };
+}
+
+// ---- launcher tile: "<n> words forged · <s> of <N> stories" (work order 2026-09-30) ----
+
+const count = (v) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.floor(v)) : 0);
+
+/** The tile summary for the game's `{ storiesUnlocked, correctTotal }`. */
+export function progressSummary({ storiesUnlocked, correctTotal }, storyCount) {
+  const n = count(correctTotal);
+  const s = Math.min(count(storiesUnlocked), storyCount);
+  return {
+    headline: `${n} ${n === 1 ? 'word' : 'words'} forged · ${s} of ${storyCount} stories`,
+    percent: storyCount > 0 ? Math.round((100 * s) / storyCount) : 0,
+  };
+}
+
+/**
+ * Field-wise max of two progress records (both are cross-device high-water marks, not
+ * sums). Non-numeric values count as 0; stories are capped at `storyCount`.
+ */
+export function mergeProgress(local, server, storyCount = Infinity) {
+  const l = local || {};
+  const r = server || {};
+  return {
+    storiesUnlocked: Math.min(storyCount, Math.max(count(l.storiesUnlocked), count(r.storiesUnlocked))),
+    correctTotal: Math.max(count(l.correctTotal), count(r.correctTotal)),
+  };
+}
+
+/**
+ * One serialized publisher (never calls `publish` while an earlier call is unsettled, so
+ * the real kit's debounce, which cancels the earlier timer without settling its promise,
+ * never strands one): `request(snapshot)` keeps the newest snapshot and starts a run if
+ * none is going; a run publishes, then repeats only if a newer snapshot arrived meanwhile.
+ * Only the run is tracked (see flushAwards); it never rejects. `request` resolves when a
+ * run that included the snapshot has finished.
+ */
+export function createPublisher(publish, { track: trackRun = trackPending } = {}) {
+  let latest;
+  let waiting = false;
+  let running = null;
+  function run() {
+    return (async () => {
+      try {
+        while (waiting) {
+          const snapshot = latest;
+          waiting = false;
+          latest = undefined;
+          try {
+            await publish(snapshot);
+          } catch (err) {
+            console.warn('[kit] save failed:', err && err.message ? err.message : err);
+          }
+        }
+      } finally {
+        running = null; // same turn as the loop's last check: a later request starts a new run
+      }
+    })();
+  }
+  return {
+    request(snapshot) {
+      latest = snapshot;
+      waiting = true;
+      if (!running) running = trackRun(run());
+      return running;
+    },
+    busy: () => running !== null,
+  };
+}
+
+/**
+ * The server copy of the game's progress, for the launcher tile and a cross-device
+ * max-merge. `hook` is the game's `window.__wfProgress` ({ learner, storyCount, get, set }).
+ * `start()` (inside the tracked start-up): the first `kit.load()`, a max-merge into the
+ * game's in-memory counts (which already include answers made while the kit started),
+ * stored through `hook.set`, then one publish, so existing progress reaches the tile with
+ * no play. `publish(snapshot)` (the game's saveProgress) goes to the publisher once that
+ * start-up publish has begun; before it, the start-up reads the game's counts itself.
+ * Saves carry `rev = correctTotal` (storiesUnlocked follows from it), so a device with
+ * fewer answers never overwrites a higher server copy. Refused under an account switch,
+ * like `award`.
+ */
+export function progressSync(kit, hook, { cookie = () => document.cookie, onMismatch = () => {}, isRestarting = () => false, track: trackRun = trackPending } = {}) {
+  let open = false;
+  const publisher = createPublisher(async (snapshot) => {
+    if (isRestarting()) return;
+    if (!sameAccount(kit, cookie())) {
+      onMismatch();
+      return;
+    }
+    const p = mergeProgress(snapshot, null, hook.storyCount);
+    await kit.save({ rev: p.correctTotal, storiesUnlocked: p.storiesUnlocked, correctTotal: p.correctTotal }, progressSummary(p, hook.storyCount));
+  }, { track: trackRun });
+  return {
+    async start() {
+      // The page's learner (read from the cookie at load) must be the kit's learner.
+      if (!kit.mock && hook.learner !== kit.user.id) {
+        onMismatch();
+        return;
+      }
+      let server = {};
+      try {
+        server = await kit.load();
+      } catch {
+        // publish the in-memory counts only
+      }
+      const merged = mergeProgress(hook.get(), server, hook.storyCount);
+      hook.set(merged);
+      open = true;
+      if (merged.correctTotal > 0 || merged.storiesUnlocked > 0) await publisher.request(hook.get());
+    },
+    publish(snapshot) {
+      if (open) publisher.request(snapshot);
+    },
+  };
 }

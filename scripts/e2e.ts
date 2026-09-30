@@ -12,7 +12,11 @@
  *      files and the manifest link's credentials attribute. Then the Return to Home Room
  *      button: a half-built word opens the leave dialog (Escape and "Stay and save" keep
  *      the learner here); with the word cleared it goes to the portal (route intercepted)
- *      with no beforeunload prompt.
+ *      with no beforeunload prompt. The launcher-tile saves the mock recorded on
+ *      window.__kitSaves are checked by headline text. A second page starts with a legacy
+ *      unscoped progress record, holds the mock's first load open and leaves during it:
+ *      the record is claimed by the learner, and the start-up's first save (existing
+ *      progress, no play) still happens before the navigation (R001, R007).
  *
  *   npm run e2e            (needs `npx playwright install chromium` once)
  */
@@ -140,8 +144,10 @@ async function gateInProductionMode() {
 // ---------------------------------------------------------------- part (b)
 
 type Award = { event: string; detail: Record<string, unknown> };
+type Save = { state: { rev: number; storiesUnlocked: number; correctTotal: number }; summary: { headline: string; percent: number } };
 type Win = Window & {
   __kitAwards?: Award[];
+  __kitSaves?: Save[];
   __wfAward?: unknown;
   checkForge?: () => void;
   maybeUnlockStory?: () => void;
@@ -150,9 +156,88 @@ type Win = Window & {
 // Top-level `let` bindings of the game's classic script, visible to evaluated code by name.
 declare const current: { w: string[] };
 declare const forgePicks: { prefix: string | null; stem: string | null; suffix: string | null };
+declare const WORDS: Array<Array<string | null>>;
 
 async function awards(page: Page): Promise<Award[]> {
   return page.evaluate(() => (window as unknown as Win).__kitAwards ?? []);
+}
+
+/** Waits until the mock kit's most recent save carries `headline`; returns that save. */
+async function lastSaveIs(page: Page, headline: string): Promise<Save> {
+  await page.waitForFunction(
+    (h) => {
+      const saves = (window as unknown as Win).__kitSaves ?? [];
+      return saves.length > 0 && saves[saves.length - 1].summary.headline === h;
+    },
+    headline,
+    { timeout: 30_000 },
+  );
+  return page.evaluate(() => {
+    const saves = (window as unknown as Win).__kitSaves!;
+    return saves[saves.length - 1];
+  });
+}
+
+/**
+ * A browser that still holds the old unscoped `wordforge:progress` (1 story, 4 answers):
+ * the learner (`dev` on localhost) claims it at page load. The mock holds its first load
+ * open (window.__kitLoadGate); the learner presses Return to Home Room with nothing
+ * unsaved, and the page must still be here while the load is out. Releasing the load
+ * inside the bounded wait lets the start-up (load, merge, first publish) finish, so the
+ * existing progress reaches the tile with no play, before the navigation. Saves are
+ * forwarded out of the page as they happen, since the page is left.
+ */
+async function leaveDuringDelayedFirstLoad(browser: Awaited<ReturnType<typeof chromium.launch>>, base: string) {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  try {
+    const recorded: Save[] = [];
+    let navigatedAfter = -1;
+    await context.exposeFunction("__e2eKitSave", (s: Save) => { recorded.push(s); });
+    await context.addInitScript(() => {
+      if (location.hostname !== "localhost") return;
+      const w = window as unknown as { __kitLoadGate?: Promise<void>; __releaseKitLoad?: () => void; __kitSaves?: unknown[]; __e2eKitSave?: (s: unknown) => void };
+      w.__kitLoadGate = new Promise<void>((resolve) => { w.__releaseKitLoad = resolve; });
+      const saves: unknown[] = [];
+      const push = saves.push.bind(saves);
+      saves.push = (...items: unknown[]) => {
+        for (const item of items) w.__e2eKitSave?.(JSON.parse(JSON.stringify(item)));
+        return push(...items);
+      };
+      w.__kitSaves = saves;
+      if (!sessionStorage.getItem("e2e-seeded")) {
+        sessionStorage.setItem("e2e-seeded", "1");
+        localStorage.setItem("wordforge:progress", JSON.stringify({ storiesUnlocked: 1, correctTotal: 4 }));
+      }
+    });
+    const page = await context.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", (e) => errors.push(e.message));
+    await page.route(HOME_ROOM, (route) => {
+      navigatedAfter = recorded.length;
+      return route.fulfill({ status: 200, contentType: "text/html", body: "<!doctype html><title>Home Room</title>" });
+    });
+    await page.goto(`${base}/`, { waitUntil: "load" });
+    await page.waitForFunction(() => typeof (window as unknown as Win).__wfAward === "function", null, { timeout: 30_000 });
+    const stored = await page.evaluate(() => ({ legacy: localStorage.getItem("wordforge:progress"), scoped: localStorage.getItem("wordforge:progress:dev") }));
+    expectEq(stored.legacy, null, "the legacy record was claimed and removed");
+    expectEq(stored.scoped, JSON.stringify({ storiesUnlocked: 1, correctTotal: 4 }), "the learner's scoped record holds it");
+    expectEq(await page.locator("#story-count").textContent(), "(1)", "the claimed story count shows");
+    expectEq(recorded.length, 0, "no save while the first load is still out");
+    const left = page.waitForURL(HOME_ROOM, { timeout: 10_000 });
+    await page.getByRole("button", { name: "Return to Home Room", exact: true }).click();
+    await page.waitForTimeout(400);
+    expectEq(page.url().startsWith(base), true, "still here while the first load is out");
+    await page.evaluate(() => (window as unknown as { __releaseKitLoad: () => void }).__releaseKitLoad());
+    await left;
+    expectEq(recorded.length, 1, "exactly one start-up save");
+    expectEq(navigatedAfter, 1, "the start-up save happened before the navigation");
+    expectEq(recorded[0].summary.headline, "4 words forged · 1 of 18 stories", "start-up save headline");
+    expectEq(recorded[0].state.rev, 4, "rev = correctTotal");
+    expectEq(errors.length, 0, `page errors: ${errors.join(" | ")}`);
+    log('dev: legacy progress claimed by the learner; leaving during a held first load waits for it, and the start-up save ("4 words forged · 1 of 18 stories") lands before navigating');
+  } finally {
+    await context.close();
+  }
 }
 
 /** Return to Home Room: dialog while a word is half-built, straight home once it is not. */
@@ -235,6 +320,10 @@ async function gameInDevelopmentMode() {
     expectEq(stories.length, 1, "story_unlocked after three correct answers");
     expectEq(stories[0].detail.story, 1, "first story index");
     log("dev: story_unlocked once after three correct answers");
+    const third = await lastSaveIs(page, "3 words forged · 1 of 18 stories");
+    expectEq(third.state.rev, 3, "tile save rev = correctTotal");
+    expectEq(third.summary.percent, 6, "tile percent");
+    log('dev: tile save "3 words forged · 1 of 18 stories"');
 
     // A correct forge: fill the picks from the current word, then check. `current` and
     // `forgePicks` are top-level `let` bindings of the classic script (global lexical
@@ -252,6 +341,19 @@ async function gameInDevelopmentMode() {
     expectEq(forged.length, 1, "word_forged after a correct forge");
     expectEq(forged[0].detail.word, expectedWord, "word_forged names the word");
     log(`dev: word_forged for "${expectedWord}"`);
+    await lastSaveIs(page, "4 words forged · 1 of 18 stories");
+    expectEq(
+      await page.evaluate(() => localStorage.getItem("wordforge:progress:dev")),
+      JSON.stringify({ storiesUnlocked: 1, correctTotal: 4 }),
+      "progress is kept under the learner's key",
+    );
+    expectEq(await page.evaluate(() => localStorage.getItem("wordforge:progress")), null, "nothing under the legacy key");
+    log('dev: tile save "4 words forged · 1 of 18 stories"; local progress under wordforge:progress:dev');
+
+    const seduce = await page.evaluate(() => WORDS.find((w) => w[0] === "seduce"));
+    expectEq(seduce?.[4], "lead apart", "seduce literal sense");
+    expectEq(seduce?.[5], "to lead aside", "seduce definition");
+    log('dev: seduce reads "to lead aside"');
 
     await homeRoomButton(page);
 
@@ -265,6 +367,8 @@ async function gameInDevelopmentMode() {
       expectEq((await fetch(`${base}${p}`, { redirect: "manual" })).status, 200, `GET ${p}`);
     }
     log("dev: repository files are 404, the game files are 200");
+
+    await leaveDuringDelayedFirstLoad(browser, base);
   } finally {
     try {
       if (browser) await browser.close();
