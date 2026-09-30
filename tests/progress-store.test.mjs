@@ -61,7 +61,7 @@ test('a storage that throws on access (privacy mode) is a failed save, not a cra
 
 // ---- per-learner progress (work order 2026-09-30, R001) ----
 
-const { learnerId, loadLearnerProgress, progressKey, sessionUserId, LEGACY_KEY } = globalThis.WF_PROGRESS;
+const { learnerId, loadLearnerProgress, progressKey, sessionUserId, LEGACY_KEY, CLAIM_KEY } = globalThis.WF_PROGRESS;
 const kit = await import('../public/kit.js');
 
 /** A Storage-like map with getItem/setItem/removeItem; `failWrites` makes setItem throw. */
@@ -139,11 +139,29 @@ test('a legacy record merges into an existing scoped one field-wise (max), sanit
   assert.equal(store.data.has(LEGACY_KEY), false);
 });
 
-test('the legacy record stays until the scoped write succeeds', () => {
+test('a failed claim imports nothing, and no other learner can claim it afterwards (WF-001)', () => {
   const store = fullStorage({ [LEGACY_KEY]: JSON.stringify({ storiesUnlocked: 1, correctTotal: 3 }) });
   store.failWrites = true;
-  assert.deepEqual(loadLearnerProgress(() => store, 'u1', 18), { storiesUnlocked: 1, correctTotal: 3 }, 'this page still uses it');
-  assert.equal(store.data.has(LEGACY_KEY), true, 'not removed while the scoped copy could not be written');
+  assert.deepEqual(loadLearnerProgress(() => store, 'u1', 18), { storiesUnlocked: 0, correctTotal: 0 }, 'nothing imported without a durable claim');
+  assert.equal(store.data.has(LEGACY_KEY), true);
+  // The marker write succeeded but the scoped copy failed: the claim is u1's.
+  store.failWrites = false;
+  store.data.set(CLAIM_KEY, 'u1');
+  assert.deepEqual(loadLearnerProgress(() => store, 'u2', 18), { storiesUnlocked: 0, correctTotal: 0 }, 'another learner cannot take it');
+  assert.equal(store.data.has(LEGACY_KEY), true);
+  assert.deepEqual(loadLearnerProgress(() => store, 'u1', 18), { storiesUnlocked: 1, correctTotal: 3 }, 'the owner finishes the claim');
+  assert.equal(store.data.get(CLAIM_KEY), 'done:u1');
+  assert.equal(store.data.has(LEGACY_KEY), false);
+});
+
+test('a legacy key recreated by an old page after the claim is removed unread, for anyone (WF-001)', () => {
+  const store = fullStorage({ [LEGACY_KEY]: JSON.stringify({ storiesUnlocked: 1, correctTotal: 3 }) });
+  loadLearnerProgress(() => store, 'first', 18);
+  store.data.set(LEGACY_KEY, JSON.stringify({ storiesUnlocked: 2, correctTotal: 9 })); // an old tab's saveProgress
+  assert.deepEqual(loadLearnerProgress(() => store, 'second', 18), { storiesUnlocked: 0, correctTotal: 0 });
+  assert.equal(store.data.has(LEGACY_KEY), false);
+  store.data.set(LEGACY_KEY, JSON.stringify({ storiesUnlocked: 2, correctTotal: 9 }));
+  assert.deepEqual(loadLearnerProgress(() => store, 'first', 18), { storiesUnlocked: 1, correctTotal: 3 }, 'not even the owner re-imports');
 });
 
 test('no learner id: nothing is read or written (memory only); unreadable storage starts from zero', () => {
@@ -151,8 +169,10 @@ test('no learner id: nothing is read or written (memory only); unreadable storag
   assert.deepEqual(loadLearnerProgress(() => store, null, 18), { storiesUnlocked: 0, correctTotal: 0 });
   assert.equal(store.data.has(LEGACY_KEY), true, 'the legacy record is left for a signed-in learner');
   const saver = createProgressSaver(() => store, null);
-  assert.equal(saver.save({ storiesUnlocked: 1, correctTotal: 4 }), true);
+  assert.equal(saver.save({ storiesUnlocked: 0, correctTotal: 0 }), true, 'nothing to keep yet');
   assert.equal(saver.unsaved(), false);
+  assert.equal(saver.save({ storiesUnlocked: 1, correctTotal: 4 }), false, 'progress held only in memory is unsaved (WF-002)');
+  assert.equal(saver.unsaved(), true, 'so the leave guard warns');
   assert.equal(store.data.size, 1);
   assert.deepEqual(loadLearnerProgress(() => { throw new Error('SecurityError'); }, 'u1', 18), { storiesUnlocked: 0, correctTotal: 0 });
 });

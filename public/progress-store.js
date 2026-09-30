@@ -23,9 +23,16 @@
   function createProgressSaver(getStorage, key) {
     var unsaved = false;
     return {
-      /** Writes the snapshot; returns true when the write succeeded. With no key (no learner id), keeps nothing. */
+      /**
+       * Writes the snapshot; returns true when the write succeeded. With no key (no learner
+       * id) nothing is written: any progress then exists only in memory, which counts as
+       * unsaved so the leave warning still shows (Codex WF-002).
+       */
       save: function (snapshot) {
-        if (!key) return true;
+        if (!key) {
+          unsaved = !!(snapshot && (snapshot.correctTotal > 0 || snapshot.storiesUnlocked > 0));
+          return !unsaved;
+        }
         try {
           getStorage().setItem(key, JSON.stringify(snapshot));
           unsaved = false;
@@ -43,6 +50,8 @@
   }
 
   var LEGACY_KEY = "wordforge:progress";
+  /** Who claimed the legacy record: `<userId>` while the claim is under way, `done:<userId>` after. */
+  var CLAIM_KEY = "wordforge:progress-legacy-claim";
   var DEV_HOSTS = ["localhost", "127.0.0.1"];
 
   function b64urlDecode(s) {
@@ -103,9 +112,13 @@
   }
 
   /**
-   * The learner's saved progress at page load. A legacy unscoped record is merged in
-   * (field-wise max) and written to the learner's key; only once that write succeeded is the
-   * legacy key removed, so it is claimed exactly once and never seen by a later learner.
+   * The learner's saved progress at page load. The legacy unscoped record belongs to exactly
+   * one learner (Codex WF-001): a durable claim marker is written **before** anything is
+   * imported, and only its owner may import. The legacy counts are merged (field-wise max)
+   * and used only once the claim and the learner's scoped copy are both stored; then the
+   * marker becomes `done:<owner>` and the legacy key is removed. A failed write imports
+   * nothing (the owner retries on a later load; nobody else can). After `done`, a legacy key
+   * recreated by a page opened before this change is removed unread, whoever sees it.
    * No learner id: nothing is read (progress stays in memory only).
    */
   function loadLearnerProgress(getStorage, userId, storyCount) {
@@ -117,17 +130,29 @@
       var scoped = readRecord(storage, key, storyCount);
       if (scoped) progress = scoped;
       var legacy = readRecord(storage, LEGACY_KEY, storyCount);
-      if (legacy) {
-        progress = {
-          storiesUnlocked: Math.max(progress.storiesUnlocked, legacy.storiesUnlocked),
-          correctTotal: Math.max(progress.correctTotal, legacy.correctTotal),
-        };
-        try {
-          storage.setItem(key, JSON.stringify(progress));
-          storage.removeItem(LEGACY_KEY);
-        } catch (e) {
-          // keep the legacy record until a write succeeds; this page still uses the merge
-        }
+      if (!legacy) return progress;
+      var claim = storage.getItem(CLAIM_KEY);
+      if (claim && claim.indexOf("done:") === 0) {
+        try { storage.removeItem(LEGACY_KEY); } catch (e) {}
+        return progress;
+      }
+      if (claim && claim !== userId) return progress; // another learner's claim is under way
+      var merged = {
+        storiesUnlocked: Math.max(progress.storiesUnlocked, legacy.storiesUnlocked),
+        correctTotal: Math.max(progress.correctTotal, legacy.correctTotal),
+      };
+      try {
+        storage.setItem(CLAIM_KEY, userId);
+        storage.setItem(key, JSON.stringify(merged));
+      } catch (e) {
+        return progress; // not durably owned yet: import nothing
+      }
+      progress = merged;
+      try {
+        storage.setItem(CLAIM_KEY, "done:" + userId);
+        storage.removeItem(LEGACY_KEY);
+      } catch (e) {
+        // the scoped copy holds the merge; the owner's next load finishes the claim
       }
     } catch (e) {
       // localStorage unavailable: start from zero, as before
@@ -142,5 +167,6 @@
     progressKey: progressKey,
     loadLearnerProgress: loadLearnerProgress,
     LEGACY_KEY: LEGACY_KEY,
+    CLAIM_KEY: CLAIM_KEY,
   };
 })(typeof self !== "undefined" ? self : globalThis);
