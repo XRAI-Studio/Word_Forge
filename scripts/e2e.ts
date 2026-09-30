@@ -157,6 +157,7 @@ type Win = Window & {
 declare const current: { w: string[] };
 declare const forgePicks: { prefix: string | null; stem: string | null; suffix: string | null };
 declare const WORDS: Array<Array<string | null>>;
+declare const PRAISE: string[];
 
 async function awards(page: Page): Promise<Award[]> {
   return page.evaluate(() => (window as unknown as Win).__kitAwards ?? []);
@@ -245,9 +246,9 @@ async function homeRoomButton(page: Page) {
   const home = page.getByRole("button", { name: "Return to Home Room", exact: true });
   expectEq(await home.isVisible(), true, "Return to Home Room button visible");
 
-  // The story unlocked above opens its modal ~0.9 s later; it covers the page, so close it.
-  await page.locator(".story-overlay .btn").click();
-  await page.locator(".story-overlay").waitFor({ state: "detached" });
+  // A story unlocked earlier opens its modal ~0.9 s later and covers the page: close any.
+  await page.waitForTimeout(1200);
+  await page.evaluate(() => document.querySelectorAll(".story-overlay").forEach((o) => o.remove()));
 
   // A fresh Forge round, then one tile snapped into a slot: a half-built word.
   await page.evaluate(() => (window as unknown as Win).setMode!("forge"));
@@ -354,6 +355,29 @@ async function gameInDevelopmentMode() {
     expectEq(seduce?.[4], "lead apart", "seduce literal sense");
     expectEq(seduce?.[5], "to lead aside", "seduce definition");
     log('dev: seduce reads "to lead aside"');
+
+    // Decode: a correct answer shows uplifting praise from the list, never the same twice running.
+    // Story cards (one per three correct answers) open ~0.9 s after the answer and cover the
+    // page; they are closed around this check.
+    const closeStories = async () => {
+      await page.waitForTimeout(1200);
+      await page.evaluate(() => document.querySelectorAll(".story-overlay").forEach((o) => o.remove()));
+    };
+    await closeStories();
+    await page.evaluate(() => (window as unknown as Win).setMode!("decode"));
+    const praiseList = await page.evaluate(() => PRAISE);
+    const shown: string[] = [];
+    for (let i = 0; i < 2; i++) {
+      await page.locator(".choice").first().waitFor({ timeout: 10_000 });
+      const correct = await page.evaluate(() => (current as unknown as { correct: string }).correct);
+      await page.locator(".choice", { hasText: new RegExp(`^${correct.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`) }).click();
+      shown.push(((await page.locator("#fb .praise").textContent()) ?? "").trim());
+      await closeStories();
+      await page.locator("#nextbtn").click();
+    }
+    for (const p of shown) expectEq(praiseList.includes(p), true, `praise "${p}" is from the list`);
+    expectEq(shown[0] !== shown[1], true, `two correct Decode answers show different praise (${shown.join(" / ")})`);
+    log(`dev: Decode praise "${shown[0]}", then "${shown[1]}"`);
 
     await homeRoomButton(page);
 

@@ -1356,6 +1356,15 @@ function renderDecode(){
       <div class="actions"><button class="btn btn-ghost" id="nextbtn" style="display:none" onclick="nextRound()">Next word 👉</button></div>
     </div>`;
 }
+/* Uplifting praise for a correct Decode answer: a random line, never the same twice running. */
+const PRAISE=["\u{1F389} Great job!","\u{1F4A1} That\u2019s clever!","\u{1F9E0} You are very smart!","\u2728 Brilliant thinking!","\u{1F513} You cracked it!","\u{1F31F} Super smart!","\u{1F3C6} Wonderful work!","\u{1F50D} What a sharp mind!","\u{1F575}\uFE0F You\u2019re a word detective!","\u{1F929} Amazing!"];
+let lastPraise=-1;
+function pickPraise(){
+  let i=Math.floor(Math.random()*PRAISE.length);
+  if(PRAISE.length>1 && i===lastPraise) i=(i+1)%PRAISE.length;
+  lastPraise=i;
+  return PRAISE[i];
+}
 function answerDecode(btn,val){
   if(answered)return;
   const ok = val===current.correct;
@@ -1369,7 +1378,7 @@ function answerDecode(btn,val){
   const w=current.w;
   const lit=`<span class="lit">${w[0]}</span> = ${[w[1],w[2],w[3]].filter(Boolean).join(" + ")} — literally "${w[4]}"`;
   $("fb").className="feedback "+(ok?"good":"bad");
-  $("fb").innerHTML=(ok?"🎉 Nailed it! ":"💪 So close — check the answer! ")+`<span class="expl">${lit}</span>`+ahaLine(w[0]);
+  $("fb").innerHTML=(ok?`<span class="praise">${pickPraise()}</span> `:"💪 So close — check the answer! ")+`<span class="expl">${lit}</span>`+ahaLine(w[0]);
   $("nextbtn").style.display="inline-block";
   updateBar();
 }
