@@ -1,4 +1,6 @@
-# Word Forge
+# Read Words
+
+Formerly called Word Forge (the repository, hostname and game slug keep that name).
 
 An educational browser game that teaches kids to read English by its Latin building blocks:
 **prefix + stem + suffix**. A Travel Schooling class: game slug `wordforge`, hostname
@@ -18,7 +20,7 @@ installed copies from their old service worker.
 
 ## Install it
 
-Word Forge is a Progressive Web App, so it can be installed like a normal app:
+Read Words is a Progressive Web App, so it can be installed like a normal app:
 
 - **iPhone / iPad**: open it in Safari, then Share → *Add to Home Screen*
 - **Android / Chromebook**: Chrome offers *Install* in the address bar or ⋮ menu
@@ -29,6 +31,11 @@ connection**: everything, fonts included, is served from the device. Offline, th
 cached copy of the game opens without the portal gate (nothing leaves the device, and XP
 cannot be awarded offline); the worker only ever caches a real 200 copy of the page, never
 the portal's login page.
+
+A copy installed before the rename may keep the launcher label "Word Forge" until the
+browser applies the updated manifest: Chrome asks the learner to accept the name change,
+and other browsers may keep the old label until the app is reinstalled. Reinstalling shows
+Read Words.
 
 ## Modes
 - **🔨 Forge**: build a word from color-coded snap-blocks to match a definition

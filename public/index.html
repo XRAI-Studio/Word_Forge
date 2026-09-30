@@ -3,12 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Word Forge — Latin Roots</title>
+<title>Read Words — Latin Roots</title>
 <meta name="theme-color" content="#2C4BE0">
 <link rel="manifest" href="manifest.webmanifest" crossorigin="use-credentials">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Word Forge">
+<meta name="apple-mobile-web-app-title" content="Read Words">
 <style>
 /* Fonts are self-hosted so the game works with no network at all. Both
    families are variable fonts, so one file covers every weight used. */
@@ -213,7 +213,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--sun);outline-of
 <body>
 <div class="wrap">
   <header>
-    <h1>Word Forge<span class="dot">.</span></h1>
+    <h1>Read Words<span class="dot">.</span></h1>
     <div class="header-side">
       <div class="tagline">🧩 Snap Latin parts together. Unlock big words!</div>
       <button type="button" id="home-room" class="home-btn" onclick="returnToHomeRoom()">Return to Home Room</button>
@@ -261,7 +261,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--sun);outline-of
 <div id="kit-banner" style="display:none;position:fixed;left:0;right:0;top:0;z-index:9999;padding:10px 16px;background:#1b1b1b;color:#fff;font:600 15px system-ui,sans-serif;text-align:center"></div>
 <script src="https://class.travelschooling.com/kit/v1/ts-kit.js"></script>
 <script type="module">
-import { initKit, award, sameAccount, flushAwards, accountChangeRestart } from './kit.js?v=4';
+import { initKit, award, sameAccount, flushAwards, accountChangeRestart } from './kit.js?v=5';
 // The Home Room button waits (bounded) for awards still in flight. Installed before the kit
 // starts so the button works whatever the kit's outcome.
 window.__wfFlushAwards = (timeoutMs) => flushAwards(timeoutMs);
@@ -303,8 +303,8 @@ if (start.kind === 'redirecting') {
   window.addEventListener('focus', check);
 }
 </script>
-<script src="progress-store.js?v=4"></script>
-<script src="leave-guard.js?v=4"></script>
+<script src="progress-store.js?v=5"></script>
+<script src="leave-guard.js?v=5"></script>
 <script>
 /* ============ DATA ============ */
 const PREFIXES = [

@@ -216,7 +216,7 @@ async function gameInDevelopmentMode() {
     page.on("pageerror", (e) => errors.push(e.message));
 
     await page.goto(`${base}/`, { waitUntil: "load" });
-    expectEq(await page.title(), "Word Forge — Latin Roots", "title");
+    expectEq(await page.title(), "Read Words — Latin Roots", "title");
     expectEq(await page.locator('link[rel="manifest"]').getAttribute("crossorigin"), "use-credentials", "manifest link credentials");
     await page.waitForFunction(() => typeof (window as unknown as Win).__wfAward === "function", null, { timeout: 30_000 });
     expectEq(await page.locator("#kit-banner").isVisible(), false, "kit banner hidden");
