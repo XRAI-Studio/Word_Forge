@@ -453,7 +453,10 @@ function syncedProgressSync(kit, hook, {
       const body = versioned ? sent : { ...syncState(sent), rev: syncTotal(sent) };
       const result = await kit.save(body, syncSummary(sent, hook.storyCount));
       if (result && result.merged !== undefined) adopt(result.merged);
-      if (result && result.stored === 'server') {
+      // Only a versioned kit's "server" proves the server holds `sent`: an old kit answers
+      // "server" even when save_progress dropped a lower-revision write (Codex WF-REVIEW-002),
+      // so with it the unsaved status clears only through a successful own-entry write.
+      if (versioned && result && result.stored === 'server') {
         const ack = result.merged !== undefined ? mergeSync(sent, result.merged) : syncState(sent);
         if (contains(ack, hook.getState())) {
           needsServer = false;

@@ -337,8 +337,9 @@ test('a lost race on :known costs nothing permanent: session entries still hold 
   const b = S.createSyncSession({ getStorage: () => store, learner: 'u1', session: 'b', legacyTotal: 1 });
   a.addCorrect();
   a.addCorrect();
-  b.addCorrect(); // b overwrites :known without a's answers
-  assert.deepEqual(entry(store, 'wordforge:sync:u1:known'), { v: 2, correct: { legacy: 1, 's.b': 1 } });
+  b.addCorrect();
+  // Two writes in the same instant: one lands on a stale read and drops a's answers from :known.
+  store.data.set('wordforge:sync:u1:known', JSON.stringify({ v: 2, correct: { legacy: 1, 's.b': 1 } }));
   assert.equal(S.syncTotal(S.loadSync(() => store, 'u1', 1)), 4);
 });
 
@@ -387,4 +388,23 @@ test('WF-CDS3-003: a failed claim, then a recovered session write, then a reload
     const legacy = loadLearnerProgress(() => store, 'u1', 18).correctTotal;
     assert.equal(S.syncTotal(S.loadSync(() => store, 'u1', legacy)), 10, `reload ${i + 1}`);
   }
+});
+
+test('WF-REVIEW-001: a stale tab answering never erases arrivals another tab kept only in :known (offline reload, no kit)', () => {
+  const store = syncStorage();
+  const a = S.createSyncSession({ getStorage: () => store, learner: 'u1', session: 'a', legacyTotal: 0 });
+  const b = S.createSyncSession({ getStorage: () => store, learner: 'u1', session: 'b', legacyTotal: 0 }); // never sees the phone
+  a.setState({ v: 2, correct: { 's.phone': 3 } }); // the phone's answers, adopted by A only
+  assert.deepEqual(entry(store, 'wordforge:sync:u1:known'), { v: 2, correct: { 's.phone': 3 } });
+  b.addCorrect(); // B answers offline and writes
+  assert.deepEqual(entry(store, 'wordforge:sync:u1:known'), { v: 2, correct: { 's.b': 1, 's.phone': 3 } }, ':known is read, merged, written');
+  const reloaded = S.loadSync(() => store, 'u1', 0);
+  assert.equal(S.syncTotal(reloaded), 4, "the phone's 3 answers and B's 1");
+  assert.equal(Math.floor(S.syncTotal(reloaded) / 3), 1, 'the story they unlocked stays unlocked');
+});
+
+test('saveKnown with an unreadable :known entry still writes the state', () => {
+  const store = syncStorage({ 'wordforge:sync:u1:known': '{broken' });
+  assert.equal(S.saveKnown(() => store, 'u1', { v: 2, correct: { 's.a': 1 } }), true);
+  assert.deepEqual(entry(store, 'wordforge:sync:u1:known'), { v: 2, correct: { 's.a': 1 } });
 });

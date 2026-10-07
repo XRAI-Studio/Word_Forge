@@ -997,3 +997,28 @@ test('WF-CDS3-001: the non-versioned path merges what it loads with mergeSync (a
   assert.equal(portal.row.state.rev, 10, 'rev = the synced total, so the old revision guard accepts it');
   assert.equal(portal.row.summary.headline, '10 words forged · 3 of 18 stories');
 });
+
+test('WF-REVIEW-002: an old kit answering { stored: "server" } never clears unsaved progress while the session entry cannot be written', async () => {
+  const storage = memStorage();
+  const setItem = storage.setItem;
+  storage.setItem = (k, v) => { if (k === 'wordforge:sync:u1:A') throw new Error('QuotaExceededError'); setItem(k, v); };
+  const hook = sessionHook(storage, 'A', 0);
+  const acks = [];
+  const realAck = hook.acknowledged;
+  hook.acknowledged = (ack) => { acks.push(ack); return realAck(ack); };
+  // A kit without refresh/deviceId whose save says "server" even when save_progress dropped
+  // a lower-revision write: it proves nothing about what the server holds.
+  const kit = { mock: true, user: { id: 'u1' }, load: async () => ({}), save: async () => ({ stored: 'server' }), award: async () => ({}) };
+  const { set, track } = localTrack();
+  const sync = progressSync(kit, hook, { cookie: () => '', track });
+  await sync.start();
+  hook.addCorrect();
+  assert.equal(sync.unsaved(), true, 'the session entry could not be written');
+  sync.publish();
+  await idle(set);
+  assert.equal(sync.unsaved(), true, 'still unsaved after the old kit answered "server"');
+  assert.deepEqual(acks, [], 'no acknowledgement from a kit that is not versioned');
+  storage.setItem = setItem;
+  hook.addCorrect();
+  assert.equal(sync.unsaved(), false, 'a successful own-entry write clears it');
+});

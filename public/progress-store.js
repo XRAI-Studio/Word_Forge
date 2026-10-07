@@ -170,9 +170,10 @@
   //     written by that session alone, synchronously with every answer, and never removed by
   //     anyone (Codex WF-CDS3-002: no cross-session cleanup, so no read-then-remove race).
   //     Accepted cost: one tiny entry per page session that answered, kept for good.
-  //   known   - shared, best effort: any session overwrites it with its whole merged state
-  //     (the other device's work it adopted included). It holds only what the server or the
-  //     session entries also hold, so a lost race there costs nothing permanent.
+  //   known   - shared, best effort: any session merges its whole state into it (the other
+  //     device's work it adopted included; read-merge-write, see saveKnown). It holds only
+  //     what the server or the session entries also hold, so a lost race there costs
+  //     nothing permanent.
   //   legacy  - the old aggregate total, imported as the `legacy` bucket (CDS3-013). The
   //     import is done only once this entry exists; until then every load tries again, and
   //     it is written as the max of its current value and the claimed aggregate, so a retry
@@ -294,11 +295,22 @@
     }
   }
 
-  /** Best effort: overwrites the shared `:known` entry with `state`. True when written. */
+  /**
+   * Best effort: merges `state` into the shared `:known` entry. Read, merge and write are one
+   * synchronous step with nothing awaited in between, so a tab that never saw another tab's
+   * adopted work keeps it instead of overwriting it (Codex WF-REVIEW-001). Accepted residual:
+   * two tabs writing `:known` within the same instant can still drop remote-only buckets
+   * from this local cache; those buckets are on the server and return on the next
+   * successful load. (Session entries keep only their own bucket: copying the full state
+   * into each would grow with the square of the sessions.) True when written.
+   */
   function saveKnown(getStorage, learner, state) {
     if (!learner) return false;
     try {
-      getStorage().setItem(syncKey(learner, KNOWN_ENTRY), JSON.stringify(syncState(state)));
+      var storage = getStorage();
+      var key = syncKey(learner, KNOWN_ENTRY);
+      var merged = mergeSync(parseEntry(storage.getItem(key)), state);
+      storage.setItem(key, JSON.stringify(merged));
       return true;
     } catch (e) {
       return false;
