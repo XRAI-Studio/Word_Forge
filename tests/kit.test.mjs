@@ -1022,3 +1022,50 @@ test('WF-REVIEW-002: an old kit answering { stored: "server" } never clears unsa
   hook.addCorrect();
   assert.equal(sync.unsaved(), false, 'a successful own-entry write clears it');
 });
+
+test('WF-CDS3-R101: a queued save that stays local with extra merged work re-arms the retry, so `online` sends it with no new answer', async () => {
+  const server = { state: { v: 2, correct: {} } };
+  const { kit } = fakeVersionedKit(server);
+  let release; const gate = new Promise((r) => { release = r; });
+  const realSave = kit.save; let n = 0;
+  kit.save = async (st, sum) => {
+    n++;
+    if (n === 1) { await gate; return realSave(st, sum); } // acknowledged: holds the current state
+    // The kit gathered another tab's unsent work, could not reach the server, and hands it back.
+    if (n === 2) return { stored: 'local', merged: mergeSync(st, { v: 2, correct: { 's.other': 2 } }) };
+    return realSave(st, sum);
+  };
+  const hook = fakeHook(server.state);
+  const win = new EventTarget();
+  const sync = progressSync(kit, hook, VOPTS({ win, setInterval: () => 1, clearInterval: () => {} }));
+  await sync.start();
+  hook.addCorrect('s.a'); sync.publish(); // save 1 in flight
+  await settle();
+  win.dispatchEvent(new Event('online')); // queues another pass while save 1 is in flight
+  release(); await settle();
+  assert.equal(n, 2, 'the queued pass ran after the acknowledged one');
+  assert.equal(hook.get().correctTotal, 3, 'the gathered work is shown');
+  assert.equal(syncTotal(server.state), 1, 'but not on the server yet');
+  win.dispatchEvent(new Event('online')); await settle(); // no new answer
+  assert.equal(n, 3);
+  assert.equal(syncTotal(server.state), 3, 'the gathered work is sent');
+});
+
+test('WF-CDS3-R101: a save that throws keeps the retry armed', async () => {
+  const server = { state: { v: 2, correct: {} } };
+  const { kit } = fakeVersionedKit(server);
+  const realSave = kit.save; let n = 0;
+  kit.save = async (st, sum) => { n++; if (n === 1) throw new Error('boom'); return realSave(st, sum); };
+  const hook = fakeHook(server.state);
+  const win = new EventTarget();
+  const warn = console.warn; console.warn = () => {};
+  try {
+    const sync = progressSync(kit, hook, VOPTS({ win, setInterval: () => 1, clearInterval: () => {} }));
+    await sync.start();
+    hook.addCorrect('s.a'); sync.publish(); await settle();
+    win.dispatchEvent(new Event('online')); await settle();
+    assert.equal(syncTotal(server.state), 1);
+  } finally {
+    console.warn = warn;
+  }
+});

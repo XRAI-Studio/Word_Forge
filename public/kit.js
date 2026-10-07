@@ -450,6 +450,11 @@ function syncedProgressSync(kit, hook, {
     }
     try {
       const sent = hook.getState();
+      // Needed again from every actual save attempt (a queued retry may run after an earlier
+      // pass cleared it): only an acknowledged versioned save holding the current state clears
+      // it below; a "local"/"none" result (with or without `merged`) or a throw keeps it
+      // (Codex WF-CDS3-R101).
+      needsServer = true;
       const body = versioned ? sent : { ...syncState(sent), rev: syncTotal(sent) };
       const result = await kit.save(body, syncSummary(sent, hook.storyCount));
       if (result && result.merged !== undefined) adopt(result.merged);
