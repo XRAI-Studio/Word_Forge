@@ -409,44 +409,81 @@ test('createPublisher: a failing publish still settles the run and clears the pe
   }
 });
 
-// A kit without cross-device sync (no refresh/deviceId): the synced state is loaded and merged
-// with mergeSync and saved as itself, with rev = its total (Codex WF-CDS3-001).
+// A kit without cross-device sync (no refresh/deviceId) is read-only (Codex WF-CDS3-R201): what it
+// loads is merged in with mergeSync, and nothing is ever published through it.
 
-test('progressSync with an old kit, start-up: existing local progress reaches the tile with no play, as the v2 state with rev = total', async () => {
+/** fakeKit with the versioned capability (refresh, deviceId), for the publisher's refusals. */
+function versionedFakeKit(portal) {
+  const kit = fakeKit(portal);
+  kit.deviceId = 'pc';
+  kit.syncBroken = false;
+  kit.refresh = async () => ({ changed: false });
+  return kit;
+}
+
+test('progressSync with an old kit: existing local progress is never published through it', async () => {
   const portal = fakePortal();
   const kit = fakeKit(portal);
   const hook = gameHook({ v: 2, correct: { legacy: 3, 's.a': 1 } });
   const { set, track } = localTrack();
   const sync = progressSync(kit, hook, { cookie: () => cookieFor('u1'), track });
   await sync.start();
+  hook.answer(); sync.publish();
   await idle(set);
-  assert.deepEqual(portal.row.state, { v: 2, correct: { legacy: 3, 's.a': 1 }, rev: 4 });
-  assert.deepEqual(portal.row.summary, { headline: '4 words forged · 1 of 18 stories', percent: 6 });
-  assert.equal(portal.saveCalls, 1, 'published once');
+  assert.equal(kit.calls.save, 0);
+  assert.equal(portal.row, null);
+  assert.equal(syncTotal(hook.getState()), 5, 'kept locally');
 });
 
-test('progressSync with an old kit, start-up: a v1 server copy becomes the legacy bucket (max), never added twice', async () => {
+test('progressSync with an old kit: a v1 server copy is read into the legacy bucket (max), never added twice', async () => {
   const portal = fakePortal();
   portal.row = { state: { rev: 9, storiesUnlocked: 3, correctTotal: 9 }, summary: {} };
   const kit = fakeKit(portal);
   const hook = gameHook({ v: 2, correct: { legacy: 4, 's.a': 1 } });
   const { set, track } = localTrack();
-  const sync = progressSync(kit, hook, { cookie: () => cookieFor('u1'), track });
-  await sync.start();
+  await progressSync(kit, hook, { cookie: () => cookieFor('u1'), track }).start();
   await idle(set);
   assert.deepEqual(hook.getState(), { v: 2, correct: { legacy: 9, 's.a': 1 } }, 'merged into the game');
-  assert.deepEqual(portal.row.state, { v: 2, correct: { legacy: 9, 's.a': 1 }, rev: 10 });
-  assert.equal(portal.row.summary.headline, '10 words forged · 3 of 18 stories');
-  // Started again on the same row: nothing grows.
+  assert.deepEqual(portal.row.state, { rev: 9, storiesUnlocked: 3, correctTotal: 9 }, 'the server row is untouched');
   const again = gameHook(hook.getState());
   await progressSync(fakeKit(portal), again, { cookie: () => cookieFor('u1'), track }).start();
   await idle(set);
   assert.equal(syncTotal(again.getState()), 10);
 });
 
-test('progressSync with an old kit: answers made while the first load is out count, and are published once after it', async () => {
+test('progressSync with an old kit: a v2 server copy (written by a versioned page) is read and merged', async () => {
   const portal = fakePortal();
-  portal.row = { state: { v: 2, correct: { 's.phone': 2 }, rev: 2 }, summary: {} };
+  portal.row = { state: { v: 2, correct: { 's.phone': 2 } }, summary: {} };
+  const kit = fakeKit(portal);
+  const hook = gameHook({ v: 2, correct: { 's.a': 1 } });
+  const { set, track } = localTrack();
+  await progressSync(kit, hook, { cookie: () => cookieFor('u1'), track }).start();
+  await idle(set);
+  assert.deepEqual(hook.getState(), { v: 2, correct: { 's.a': 1, 's.phone': 2 } });
+  assert.equal(kit.calls.save, 0);
+});
+
+test('progressSync with an old kit: a load failure changes nothing; refresh does nothing and no retry timer is armed', async () => {
+  const portal = fakePortal();
+  const kit = fakeKit(portal);
+  kit.load = async () => { throw new Error('network'); };
+  const { set, track } = localTrack();
+  let timers = 0;
+  const win = new EventTarget();
+  const hook = gameHook({ v: 2, correct: { 's.a': 2 } });
+  const sync = progressSync(kit, hook, { cookie: () => cookieFor('u1'), track, win, setInterval: () => { timers++; return 1; }, clearInterval: () => {} });
+  await sync.start();
+  await sync.refresh();
+  win.dispatchEvent(new Event('online'));
+  await idle(set);
+  assert.equal(syncTotal(hook.getState()), 2);
+  assert.equal(timers, 0);
+  assert.equal(kit.calls.save, 0);
+});
+
+test('progressSync with an old kit: answers made while the first load is out count', async () => {
+  const portal = fakePortal();
+  portal.row = { state: { v: 2, correct: { 's.phone': 2 } }, summary: {} };
   const kit = fakeKit(portal);
   let release;
   const gate = new Promise((r) => { release = r; });
@@ -455,6 +492,28 @@ test('progressSync with an old kit: answers made while the first load is out cou
   const hook = gameHook();
   const { set, track } = localTrack();
   const sync = progressSync(kit, hook, { cookie: () => cookieFor('u1'), track });
+  const started = track(sync.start());
+  hook.answer(); sync.publish();
+  hook.answer(); sync.publish();
+  hook.answer(); sync.publish();
+  release();
+  await started;
+  await idle(set);
+  assert.equal(syncTotal(hook.getState()), 5, '3 here plus 2 from the phone');
+  assert.equal(portal.saveCalls, 0);
+});
+
+test('progressSync with a versioned kit: answers made while the first load is out count, and are published once after it', async () => {
+  const portal = fakePortal();
+  portal.row = { state: { v: 2, correct: { 's.phone': 2 } }, summary: {} };
+  const kit = versionedFakeKit(portal);
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const load = kit.load.bind(kit);
+  kit.load = () => gate.then(load);
+  const hook = gameHook();
+  const { set, track } = localTrack();
+  const sync = progressSync(kit, hook, { cookie: () => cookieFor('u1'), track, win: new EventTarget(), setInterval: () => 1, clearInterval: () => {} });
   const started = track(sync.start()); // index.html tracks the whole start-up
   hook.answer(); sync.publish(); // before the start-up publish: the start-up reads the state itself
   hook.answer(); sync.publish();
@@ -465,7 +524,7 @@ test('progressSync with an old kit: answers made while the first load is out cou
   release();
   await started;
   await idle(set);
-  assert.equal(syncTotal(hook.getState()), 5, '3 here plus 2 from the phone');
+  assert.equal(syncTotal(hook.getState()), 5);
   assert.equal(portal.saveCalls, 1);
   assert.equal(portal.row.summary.headline, '5 words forged · 1 of 18 stories');
   hook.answer(); sync.publish();
@@ -473,31 +532,15 @@ test('progressSync with an old kit: answers made while the first load is out cou
   assert.equal(portal.row.summary.headline, '6 words forged · 2 of 18 stories');
 });
 
-test('progressSync with an old kit: a load failure publishes the local state only; nothing to publish for a new learner', async () => {
-  const portal = fakePortal();
-  const kit = fakeKit(portal);
-  kit.load = async () => { throw new Error('network'); };
-  const { set, track } = localTrack();
-  const sync = progressSync(kit, gameHook({ v: 2, correct: { 's.a': 2 } }), { cookie: () => cookieFor('u1'), track });
-  await sync.start();
-  await idle(set);
-  assert.equal(portal.row.summary.headline, '2 words forged · 0 of 18 stories');
-
-  const empty = fakePortal();
-  const fresh = progressSync(fakeKit(empty), gameHook(), { cookie: () => cookieFor('u1'), track });
-  await fresh.start();
-  await idle(set);
-  assert.equal(empty.saveCalls, 0, 'the tile stays "Not started" until the first answer');
-});
-
 test('progressSync refuses to save for a learner who is no longer signed in, or when the page belongs to another learner', async () => {
   const portal = fakePortal();
-  const kit = fakeKit(portal);
+  const kit = versionedFakeKit(portal);
   const { set, track } = localTrack();
   let mismatches = 0;
   let cookie = cookieFor('u1');
   const hook = gameHook({ v: 2, correct: { 's.a': 1 } });
-  const sync = progressSync(kit, hook, { cookie: () => cookie, onMismatch: () => { mismatches++; }, track });
+  const opts = { onMismatch: () => { mismatches++; }, track, win: new EventTarget(), setInterval: () => 1, clearInterval: () => {} };
+  const sync = progressSync(kit, hook, { cookie: () => cookie, ...opts });
   await sync.start();
   await idle(set);
   assert.equal(portal.row.summary.headline, '1 word forged · 0 of 18 stories');
@@ -509,7 +552,7 @@ test('progressSync refuses to save for a learner who is no longer signed in, or 
 
   // The page loaded u2's local progress but the kit started as u1: nothing is merged or saved.
   const other = fakePortal();
-  const wrong = progressSync(fakeKit(other), gameHook({ v: 2, correct: { 's.a': 5 } }, 'u2'), { cookie: () => cookieFor('u1'), onMismatch: () => { mismatches++; }, track });
+  const wrong = progressSync(versionedFakeKit(other), gameHook({ v: 2, correct: { 's.a': 5 } }, 'u2'), { cookie: () => cookieFor('u1'), ...opts });
   await wrong.start();
   await idle(set);
   assert.equal(mismatches, 2);
@@ -519,27 +562,10 @@ test('progressSync refuses to save for a learner who is no longer signed in, or 
 test('progressSync: nothing is published while the account-change restart runs', async () => {
   const portal = fakePortal();
   const { set, track } = localTrack();
-  const sync = progressSync(fakeKit(portal), gameHook({ v: 2, correct: { 's.a': 1 } }), { cookie: () => cookieFor('u1'), isRestarting: () => true, track });
+  const sync = progressSync(versionedFakeKit(portal), gameHook({ v: 2, correct: { 's.a': 1 } }), { cookie: () => cookieFor('u1'), isRestarting: () => true, track, win: new EventTarget(), setInterval: () => 1, clearInterval: () => {} });
   await sync.start();
   await idle(set);
   assert.equal(portal.saveCalls, 0);
-});
-
-test('progressSync with an old kit: refresh does nothing and no retry timer is armed', async () => {
-  const portal = fakePortal();
-  portal.offline = true;
-  const kit = fakeKit(portal);
-  const { set, track } = localTrack();
-  let timers = 0;
-  const win = new EventTarget();
-  const sync = progressSync(kit, gameHook({ v: 2, correct: { 's.a': 1 } }), { cookie: () => cookieFor('u1'), track, win, setInterval: () => { timers++; return 1; }, clearInterval: () => {} });
-  await sync.start();
-  await idle(set);
-  await sync.refresh();
-  win.dispatchEvent(new Event('online'));
-  await idle(set);
-  assert.equal(timers, 0);
-  assert.equal(portal.saveCalls, 1, 'the old kit replays its own dirty copy at its next start');
 });
 
 test('trackPending: a tracked start-up holds flushAwards until it settles, a rejection included', async () => {
@@ -962,7 +988,7 @@ function sessionHook(storage, session, legacyTotal = 0, learner = 'u1') {
   };
 }
 
-test('WF-CDS3-001: an old kit gets the v2 state itself, so a later versioned load counts two answers exactly once', async () => {
+test('WF-CDS3-001: an old kit never receives a total derived from the v2 state, so a later versioned load counts two answers exactly once', async () => {
   const portal = fakePortal();
   portal.row = { state: { rev: 10, storiesUnlocked: 3, correctTotal: 10 }, summary: {} };
   const storage = memStorage();
@@ -974,13 +1000,10 @@ test('WF-CDS3-001: an old kit gets the v2 state itself, so a later versioned loa
   hook.addCorrect(); sync.publish();
   hook.addCorrect(); sync.publish();
   await idle(set);
-  assert.equal(portal.row.state.v, 2, 'the saved state is the v2 state, not an aggregate derived from it');
-  assert.deepEqual(syncState(portal.row.state), hook.getState());
+  assert.deepEqual(portal.row.state, { rev: 10, storiesUnlocked: 3, correctTotal: 10 }, 'nothing derived from the v2 state was saved');
   // A versioned kit later loads (or replays) that row into the same session: +2, not +4.
   const replayed = mergeSync(hook.getState(), portal.row.state);
   assert.equal(syncTotal(replayed), 12);
-  // And a fresh browser that has only the server copy sees the same total.
-  assert.equal(syncTotal(syncState(portal.row.state)), 12);
 });
 
 test('WF-CDS3-001: the non-versioned path merges what it loads with mergeSync (a v1 row becomes the legacy bucket)', async () => {
@@ -994,8 +1017,7 @@ test('WF-CDS3-001: the non-versioned path merges what it loads with mergeSync (a
   await sync.start();
   await idle(set);
   assert.deepEqual(hook.getState(), { v: 2, correct: { legacy: 9, 's.A': 1 } });
-  assert.equal(portal.row.state.rev, 10, 'rev = the synced total, so the old revision guard accepts it');
-  assert.equal(portal.row.summary.headline, '10 words forged · 3 of 18 stories');
+  assert.equal(portal.saveCalls, 0);
 });
 
 test('WF-REVIEW-002: an old kit answering { stored: "server" } never clears unsaved progress while the session entry cannot be written', async () => {
@@ -1068,4 +1090,35 @@ test('WF-CDS3-R101: a save that throws keeps the retry armed', async () => {
   } finally {
     console.warn = warn;
   }
+});
+
+test('WF-CDS3-R201: with kits that are not versioned, two clients answering different buckets never call kit.save; a later versioned start publishes both', async () => {
+  const storage = memStorage();
+  const portal = fakePortal();
+  portal.row = { state: { rev: 5, storiesUnlocked: 1, correctTotal: 5 }, summary: {} };
+  const { set, track } = localTrack();
+  const clients = ['A', 'B'].map((session) => {
+    const kit = fakeKit(portal); // no refresh/deviceId
+    const hook = sessionHook(storage, session, 0);
+    return { kit, hook, sync: progressSync(kit, hook, { cookie: () => cookieFor('u1'), track }) };
+  });
+  for (const c of clients) await c.sync.start();
+  for (const c of clients) { c.hook.addCorrect(); c.sync.publish(); }
+  await idle(set);
+  assert.equal(clients[0].kit.calls.save + clients[1].kit.calls.save, 0, 'no kit.save with a kit that is not versioned');
+  assert.equal(portal.saveCalls, 0);
+  assert.equal(syncTotal(clients[0].hook.getState()), 6, 'the server copy is still read (read-only) and shown');
+  assert.equal(clients[0].sync.unsaved(), false, 'kept in the local sync entries');
+
+  // The next start with a versioned kit, over the same local storage, publishes both answers.
+  const server = { state: portal.row.state };
+  const { kit, calls } = fakeVersionedKit(server);
+  const hook = sessionHook(storage, 'C', 0);
+  await progressSync(kit, hook, { cookie: () => '', track }).start();
+  await idle(set);
+  assert.equal(calls.saves.length, 1);
+  const sent = calls.saves[0].state;
+  assert.equal(sent.correct['s.A'], 1);
+  assert.equal(sent.correct['s.B'], 1);
+  assert.equal(syncTotal(server.state), 7, 'legacy 5 plus both answers');
 });

@@ -379,11 +379,13 @@ export function progressSync(kit, hook, opts = {}) {
  * status only when it contains the current state (CDS3-014). Safe mode (`kit.syncBroken`):
  * the notice once, and no more retries; the game keeps counting locally.
  *
- * With a kit that is not versioned (no refresh/deviceId), the same synced state is loaded
- * and merged with mergeSync and saved as itself, never as a total derived from it (Codex
- * WF-CDS3-001), plus `rev` = its total for the old `save_progress` revision guard (mergeSync
- * ignores it). Such a kit replays its own unsent copy at the next start, so there is no
- * retry, no refresh and no acknowledgement.
+ * With a kit that is not versioned (no refresh/deviceId), nothing is ever published (Codex
+ * WF-CDS3-R201): its `save_progress` keeps whichever copy has the higher rev, so two devices'
+ * new buckets would replace each other, and a total derived from the buckets would count
+ * them twice later (WF-CDS3-001). What it loads is still merged in (read-only, mergeSync) so
+ * the page shows the server's progress; the work stays in the local sync entries (unsaved
+ * status from the session's own entry write) and is published by the start-up publish the
+ * next time the page runs with a versioned kit. No retry, refresh or acknowledgement.
  */
 function syncedProgressSync(kit, hook, {
   cookie = () => document.cookie,
@@ -455,8 +457,7 @@ function syncedProgressSync(kit, hook, {
       // it below; a "local"/"none" result (with or without `merged`) or a throw keeps it
       // (Codex WF-CDS3-R101).
       needsServer = true;
-      const body = versioned ? sent : { ...syncState(sent), rev: syncTotal(sent) };
-      const result = await kit.save(body, syncSummary(sent, hook.storyCount));
+      const result = await kit.save(sent, syncSummary(sent, hook.storyCount));
       if (result && result.merged !== undefined) adopt(result.merged);
       // Only a versioned kit's "server" proves the server holds `sent`: an old kit answers
       // "server" even when save_progress dropped a lower-revision write (Codex WF-REVIEW-002),
@@ -491,13 +492,13 @@ function syncedProgressSync(kit, hook, {
       open = true;
       // Always publish non-empty local state once (CDS3-011): kit.load() may already include
       // this device's unsent work, so equality with it proves nothing was stored.
-      if (syncTotal(hook.getState()) > 0) {
+      if (versioned && syncTotal(hook.getState()) > 0) {
         needsServer = true;
         await publisher.request();
       }
     },
     publish() {
-      if (!open) return;
+      if (!open || !versioned) return; // never publish through a kit that is not versioned (R201)
       needsServer = true;
       publisher.request();
     },
