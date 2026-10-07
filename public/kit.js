@@ -354,7 +354,7 @@ export const SAFE_MODE_TEXT = "Can't sync on this device right now. Your work is
 /** How often a save the server has not acknowledged is sent again (CDS3-004). */
 export const RETRY_MS = 30_000;
 
-/** The kit combines copies across devices (CDS3-006); otherwise the max-merge path below. */
+/** The kit combines copies across devices (CDS3-006); otherwise no refresh, retry or acknowledgement. */
 export function isVersionedKit(kit) {
   return !!kit && typeof kit.refresh === 'function' && typeof kit.deviceId === 'string';
 }
@@ -375,7 +375,7 @@ export function progressSync(kit, hook, opts = {}) {
  * hook's current state; the publish is needed again ("needs server save") until a save
  * resolves `{ stored: "server" }` holding the current state, re-sent on the window's `online`
  * event and every RETRY_MS on one timer. A server acknowledgement reaches
- * `hook.acknowledged(ack)` (it cleans up other sessions' entries), and clears the unsaved
+ * `hook.acknowledged(ack)` (it keeps the shared :known entry current), and clears the unsaved
  * status only when it contains the current state (CDS3-014). Safe mode (`kit.syncBroken`):
  * the notice once, and no more retries; the game keeps counting locally.
  *
