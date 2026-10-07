@@ -555,3 +555,77 @@ test('mockKit: load returns {} until a save, saves are recorded, a lower rev is 
   assert.deepEqual(await kit.load(), { rev: 4, storiesUnlocked: 1, correctTotal: 4 });
   assert.deepEqual(win.__kitSaves.map((s) => s.summary.headline), ['4 words forged · 1 of 18 stories', '2 words forged · 0 of 18 stories']);
 });
+
+// ---- cross-device sync, Plan 3: per-session correct-answer counts (Task 1) ----
+
+const { syncState, mergeSync, syncTotal, storiesFor, syncSummary } = await import('../public/kit.js');
+
+test('syncState converts v1 to a legacy bucket and junk to empty', () => {
+  assert.deepEqual(syncState({ rev: 9, storiesUnlocked: 3, correctTotal: 9 }), { v: 2, correct: { legacy: 9 } });
+  assert.deepEqual(syncState({ rev: 0, storiesUnlocked: 0, correctTotal: 0 }), { v: 2, correct: {} });
+  assert.deepEqual(syncState({ v: 2, correct: { pc: 2, legacy: 9 } }), { v: 2, correct: { legacy: 9, pc: 2 } });
+  assert.deepEqual(Object.keys(syncState({ v: 2, correct: { pc: 2, legacy: 9 } }).correct), ['legacy', 'pc'], 'keys sorted');
+  assert.deepEqual(syncState(null), { v: 2, correct: {} });
+  assert.deepEqual(syncState('junk'), { v: 2, correct: {} });
+  assert.deepEqual(syncState({ v: 2, correct: { pc: -1, phone: 'x', tab: 2.5 } }), { v: 2, correct: { tab: 2 } });
+});
+
+test('mergeSync is prototype-safe: unusual keys round-trip and merge', () => {
+  const odd = JSON.parse('{"v":2,"correct":{"constructor":1,"toString":2,"__proto__":3}}');
+  const m = mergeSync(odd, { v: 2, correct: {} });
+  assert.equal(syncTotal(m), 6);
+  assert.equal(Object.keys(m.correct).length, 3);
+  assert.equal(mergeSync({ v: 2, correct: {} }, odd).correct.constructor, 1);
+  assert.equal(syncTotal(JSON.parse(JSON.stringify(m))), 6, 'survives a JSON round trip');
+  assert.equal(syncTotal(mergeSync({ v: 2, correct: { pc: 1 } }, { v: 2, correct: {} })), 1, 'absent keys never read the prototype');
+});
+
+test('mergeSync adds devices, max-merges each device, and derives stories', () => {
+  const m = mergeSync({ v: 2, correct: { legacy: 9, pc: 2 } }, { v: 2, correct: { legacy: 9, phone: 4 } });
+  assert.deepEqual(m, { v: 2, correct: { legacy: 9, pc: 2, phone: 4 } });
+  assert.equal(syncTotal(m), 15);
+  assert.equal(storiesFor(15, 12), 5);
+  assert.equal(storiesFor(100, 12), 12);
+  assert.equal(storiesFor(2, 12), 0);
+  assert.match(syncSummary(m, 12).headline, /^15 words forged · 5 of 12 stories$/);
+});
+
+/** The plan's simulated devices: answers in a device's own bucket, and pairwise syncs. */
+function simulateDevices(seed) {
+  const rng = (s) => { let x = s >>> 0; return () => ((x = (x * 1664525 + 1013904223) >>> 0) / 2 ** 32); };
+  const r = rng(seed), devices = ['pc', 'phone', 'tablet'];
+  const st = new Map(devices.map((d) => [d, syncState({ correctTotal: 5 })]));
+  for (let i = 0; i < 60; i++) {
+    const d = devices[Math.floor(r() * 3)], s = st.get(d);
+    if (r() < 0.6) st.set(d, { v: 2, correct: { ...s.correct, [d]: (s.correct[d] ?? 0) + 1 } });
+    else { const o = devices.filter((x) => x !== d)[Math.floor(r() * 2)]; const m = mergeSync(s, st.get(o)); st.set(d, m); if (r() < 0.5) st.set(o, m); }
+  }
+  return devices.map((d) => syncState(st.get(d)));
+}
+
+for (const [name, check] of [
+  ['idempotent', ([a]) => assert.deepEqual(mergeSync(a, a), a)],
+  ['commutative', ([a, b]) => assert.deepEqual(mergeSync(a, b), mergeSync(b, a))],
+  ['associative', ([a, b, c]) => assert.deepEqual(mergeSync(mergeSync(a, b), c), mergeSync(a, mergeSync(b, c)))],
+  ['loses no device count', ([a, b]) => { const m = mergeSync(a, b); for (const k of Object.keys({ ...a.correct, ...b.correct })) assert.equal(m.correct[k], Math.max(a.correct[k] ?? 0, b.correct[k] ?? 0)); }],
+  ['the total is the sum of the devices, not the higher of two', ([a, b]) => { const m = mergeSync(a, b); assert.ok(syncTotal(m) >= Math.max(syncTotal(a), syncTotal(b))); }],
+]) {
+  test(`mergeSync algebra on simulated devices (600 seeds): ${name}`, () => { for (let seed = 1; seed <= 600; seed++) check(simulateDevices(seed)); });
+}
+
+test('Review Focus 1: phone and PC each answer offline; the merge is the sum, stories follow it', () => {
+  const base = syncState({ correctTotal: 6, storiesUnlocked: 2, rev: 6 });
+  const pc = mergeSync(base, { v: 2, correct: { 's.pc1': 4 } });
+  const phone = mergeSync(base, { v: 2, correct: { 's.ph1': 5 } });
+  const m = mergeSync(pc, phone);
+  assert.equal(syncTotal(m), 15);
+  assert.equal(storiesFor(syncTotal(m), 18), 5);
+});
+
+test('Review Focus 2: v1 progress on both devices at switch-on is not doubled (legacy max-merges)', () => {
+  const pc = mergeSync(syncState({ correctTotal: 9, storiesUnlocked: 3, rev: 9 }), { v: 2, correct: { 's.pc': 1 } });
+  const phone = syncState({ correctTotal: 11, storiesUnlocked: 3, rev: 11 });
+  const m = mergeSync(pc, phone);
+  assert.deepEqual(m, { v: 2, correct: { legacy: 11, 's.pc': 1 } });
+  assert.equal(syncTotal(m), 12, 'the larger legacy total plus this device\'s new answer');
+});

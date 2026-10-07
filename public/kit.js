@@ -224,6 +224,60 @@ export function progressSummary({ storiesUnlocked, correctTotal }, storyCount) {
   };
 }
 
+// ---- cross-device sync (Plan 3): correct answers per page session; the total is the sum ----
+
+const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+/**
+ * Object.fromEntries defines own data properties, so "__proto__" or "constructor" are
+ * ordinary keys; every read goes through own(), never through the prototype (CDS3-008).
+ */
+const counterObject = (entries) => Object.fromEntries(entries);
+
+/**
+ * Read Words' synced state `{ v: 2, correct: { [bucket]: n } }`, keys sorted. A v1 record
+ * (`{ correctTotal, storiesUnlocked, rev }`) becomes the shared `legacy` bucket; anything
+ * else is empty. Counts are non-negative integers; other values are dropped.
+ */
+export function syncState(raw) {
+  const r = raw && typeof raw === 'object' ? raw : {};
+  if (r.v === 2 && r.correct && typeof r.correct === 'object' && !Array.isArray(r.correct)) {
+    const c = r.correct;
+    return {
+      v: 2,
+      correct: counterObject(Object.keys(c).sort().flatMap((k) => {
+        const n = own(c, k) ? c[k] : undefined;
+        return typeof n === 'number' && Number.isFinite(n) && n >= 0 ? [[k, Math.floor(n)]] : [];
+      })),
+    };
+  }
+  const legacy = count(r.correctTotal);
+  return { v: 2, correct: counterObject(legacy > 0 ? [['legacy', legacy]] : []) };
+}
+
+/** Per-bucket max, keys sorted: idempotent, commutative and associative; never reads the clock. */
+export function mergeSync(a, b) {
+  const x = syncState(a).correct;
+  const y = syncState(b).correct;
+  const keys = [...new Set([...Object.keys(x), ...Object.keys(y)])].sort();
+  return { v: 2, correct: counterObject(keys.map((k) => [k, Math.max(own(x, k) ? x[k] : 0, own(y, k) ? y[k] : 0)])) };
+}
+
+/** Correct answers across every bucket. */
+export function syncTotal(s) {
+  return Object.values(syncState(s).correct).reduce((t, n) => t + n, 0);
+}
+
+/** One story per three correct answers, capped at the story count. */
+export function storiesFor(total, storyCount) {
+  return Math.min(storyCount, Math.floor(count(total) / 3));
+}
+
+/** The tile summary of a synced state. */
+export function syncSummary(s, storyCount) {
+  const total = syncTotal(s);
+  return progressSummary({ correctTotal: total, storiesUnlocked: storiesFor(total, storyCount) }, storyCount);
+}
+
 /**
  * Field-wise max of two progress records (both are cross-device high-water marks, not
  * sums). Non-numeric values count as 0; stories are capped at `storyCount`.
