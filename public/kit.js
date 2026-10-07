@@ -20,23 +20,46 @@ const clone = (v) => (v === undefined ? v : JSON.parse(JSON.stringify(v)));
  * calling the portal. It keeps one stored state in memory (load returns `{}` until a save),
  * and drops a save whose rev is lower than the stored one, as `save_progress` does.
  * `win.__kitLoadGate` (e2e): a promise every load waits for, to hold the first load open.
+ *
+ * With `{ merge }` (cross-device sync opt-in, as TSKit.init takes it) it is versioned like
+ * the real kit: `deviceId`, `syncBroken`, a save combines with the stored copy and resolves
+ * `{ stored: "server", merged? }` (`merged` when the combination differs from what was
+ * saved), and `refresh(current)` answers `{ changed, state? }`.
  */
-export function mockKit(win) {
+export function mockKit(win, { merge } = {}) {
   const awards = (win.__kitAwards = win.__kitAwards || []);
   const saves = (win.__kitSaves = win.__kitSaves || []);
   let stored = null;
   const revOf = (state) => (state && typeof state.rev === 'number' ? state.rev : 0);
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const versioned = typeof merge === 'function'
+    ? {
+        deviceId: 'dev-device',
+        syncBroken: false,
+        refresh: async (current) => {
+          if (!stored) return { changed: false };
+          const m = merge(clone(current), clone(stored));
+          return same(m, merge(clone(current), clone(current))) ? { changed: false } : { changed: true, state: m };
+        },
+      }
+    : {};
   return {
     mock: true,
     user: { id: 'dev', displayName: 'Dev Learner', role: 'student' },
     totals: { xp: 0, gems: 0, level: 1, streak: 0 },
     launcherUrl: 'https://class.travelschooling.com',
+    ...versioned,
     load: async () => {
       if (win.__kitLoadGate) await win.__kitLoadGate;
       return stored ? clone(stored) : {};
     },
     save: async (state, summary = {}) => {
       saves.push(clone({ state, summary }));
+      if (typeof merge === 'function') {
+        const sent = clone(state);
+        stored = stored ? merge(clone(stored), sent) : merge(sent, sent);
+        return same(stored, merge(sent, sent)) ? { stored: 'server' } : { stored: 'server', merged: clone(stored) };
+      }
       if (!stored || revOf(state) >= revOf(stored)) stored = clone(state);
     },
     award: async (event, detail = {}) => {
@@ -63,10 +86,17 @@ export function initKit(opts) {
   return starting;
 }
 
-async function startKit({ hostname = location.hostname, TSKit = globalThis.TSKit, win = globalThis } = {}) {
-  if (isDevHost(hostname)) return { kind: 'ready', kit: mockKit(win) };
+/**
+ * Opts in to cross-device sync: the kit combines copies with mergeSync and summarizes a
+ * combined copy for the tile over `storyCount` (the game's story list, from index.html).
+ * `win.__tsTestKit` (e2e seam): a TSKit-like `{ init }` used instead of the localhost mock.
+ */
+async function startKit({ hostname = location.hostname, TSKit = globalThis.TSKit, win = globalThis, storyCount = 18 } = {}) {
+  const options = { game: GAME, merge: mergeSync, summarize: (s) => syncSummary(s, storyCount) };
+  if (win && win.__tsTestKit && typeof win.__tsTestKit.init === 'function') TSKit = win.__tsTestKit;
+  else if (isDevHost(hostname)) return { kind: 'ready', kit: mockKit(win, options) };
   if (!TSKit || typeof TSKit.init !== 'function') return { kind: 'unavailable' };
-  const kit = await TSKit.init({ game: GAME });
+  const kit = await TSKit.init(options);
   if (!kit || !kit.user) return { kind: 'redirecting' };
   return { kind: 'ready', kit };
 }
@@ -332,9 +362,163 @@ export function createPublisher(publish, { track: trackRun = trackPending } = {}
   };
 }
 
+export const ARRIVAL_TEXT = 'Updated with your work from your other device.';
+export const SAFE_MODE_TEXT = "Can't sync on this device right now. Your work is kept here.";
+/** How often a save the server has not acknowledged is sent again (CDS3-004). */
+export const RETRY_MS = 30_000;
+
+/** The kit combines copies across devices (CDS3-006); otherwise the max-merge path below. */
+export function isVersionedKit(kit) {
+  return !!kit && typeof kit.refresh === 'function' && typeof kit.deviceId === 'string';
+}
+
+/**
+ * The game's progress on the server (launcher tile and cross-device sync). With a versioned
+ * kit, the synced state is combined (see versionedProgressSync); with an older kit, today's
+ * max-merge of the totals (maxMergeProgressSync). Returns { start, publish, refresh, unsaved }.
+ */
+export function progressSync(kit, hook, opts = {}) {
+  return isVersionedKit(kit) ? versionedProgressSync(kit, hook, opts) : maxMergeProgressSync(kit, hook, opts);
+}
+
+/**
+ * Cross-device sync over the hook's synced state (`window.__wfProgress`: getState, setState,
+ * unsaved, clearUnsaved, acknowledged, learner, storyCount). Every copy that comes back (the
+ * first load, a save's `merged`, a refresh) is merged in; when that adds answers, the game
+ * shows them (`hook.setState`) and the kit toasts the arrival notice. Each publish sends the
+ * hook's current state; the publish is needed again ("needs server save") until a save
+ * resolves `{ stored: "server" }` holding the current state, re-sent on the window's `online`
+ * event and every RETRY_MS on one timer. A server acknowledgement reaches
+ * `hook.acknowledged(ack)` (it cleans up other sessions' entries), and clears the unsaved
+ * status only when it contains the current state (CDS3-014). Safe mode (`kit.syncBroken`):
+ * the notice once, and no more retries; the game keeps counting locally.
+ */
+function versionedProgressSync(kit, hook, {
+  cookie = () => document.cookie,
+  onMismatch = () => {},
+  isRestarting = () => false,
+  track: trackRun = trackPending,
+  win = globalThis,
+  setInterval: setIntervalFn = (fn, ms) => setInterval(fn, ms),
+  clearInterval: clearIntervalFn = (id) => clearInterval(id),
+  retryMs = RETRY_MS,
+} = {}) {
+  let open = false;
+  let needsServer = false;
+  let announced = false;
+  let timer = null;
+  const toast = (text) => {
+    try {
+      if (typeof kit.toast === 'function') kit.toast(text);
+    } catch {
+      // a notice is never worth failing over
+    }
+  };
+  const sameState = (a, b) => JSON.stringify(syncState(a)) === JSON.stringify(syncState(b));
+  const contains = (big, small) => sameState(mergeSync(big, small), big);
+  function stopTimer() {
+    if (timer !== null) {
+      clearIntervalFn(timer);
+      timer = null;
+    }
+  }
+  /** True in safe mode; announces it once and stops the retry. */
+  function checkBroken() {
+    if (!kit.syncBroken) return false;
+    stopTimer();
+    if (!announced) {
+      announced = true;
+      toast(SAFE_MODE_TEXT);
+    }
+    return true;
+  }
+  function armRetry() {
+    if (!needsServer) return stopTimer();
+    if (checkBroken() || timer !== null) return;
+    timer = setIntervalFn(retry, retryMs);
+    if (timer && typeof timer.unref === 'function') timer.unref(); // Node: never hold the process open
+  }
+  function retry() {
+    if (open && needsServer && !kit.syncBroken && !isRestarting()) publisher.request();
+  }
+  function adopt(state) {
+    const current = hook.getState();
+    const next = mergeSync(current, state);
+    if (syncTotal(next) > syncTotal(current)) {
+      hook.setState(next);
+      toast(ARRIVAL_TEXT);
+    }
+  }
+  const publisher = createPublisher(async () => {
+    if (isRestarting()) return;
+    if (!sameAccount(kit, cookie())) {
+      onMismatch();
+      return;
+    }
+    try {
+      const sent = hook.getState();
+      const result = await kit.save(sent, syncSummary(sent, hook.storyCount));
+      if (result && result.merged !== undefined) adopt(result.merged);
+      if (result && result.stored === 'server') {
+        const ack = result.merged !== undefined ? mergeSync(sent, result.merged) : syncState(sent);
+        if (contains(ack, hook.getState())) {
+          needsServer = false;
+          if (typeof hook.clearUnsaved === 'function') hook.clearUnsaved();
+        }
+        if (typeof hook.acknowledged === 'function') hook.acknowledged(ack);
+      }
+    } finally {
+      checkBroken();
+      armRetry();
+    }
+  }, { track: trackRun });
+  return {
+    async start() {
+      // The page's learner (read from the cookie at load) must be the kit's learner.
+      if (!kit.mock && hook.learner !== kit.user.id) {
+        onMismatch();
+        return;
+      }
+      if (win && typeof win.addEventListener === 'function') win.addEventListener('online', retry);
+      try {
+        adopt(await kit.load());
+      } catch {
+        // publish the local state only
+      }
+      checkBroken();
+      open = true;
+      // Always publish non-empty local state once (CDS3-011): kit.load() may already include
+      // this device's unsent work, so equality with it proves nothing was stored.
+      if (syncTotal(hook.getState()) > 0) {
+        needsServer = true;
+        await publisher.request();
+      }
+    },
+    publish() {
+      if (!open) return;
+      needsServer = true;
+      publisher.request();
+    },
+    /** On return to the page: pick up the other device's work, unless a publish is in flight. */
+    async refresh() {
+      if (!open || publisher.busy() || isRestarting()) return;
+      let r = null;
+      try {
+        r = await kit.refresh(hook.getState());
+      } catch {
+        // refresh never rejects in the real kit; a failure changes nothing
+      }
+      checkBroken();
+      if (r && r.changed && r.state !== undefined) adopt(r.state);
+    },
+    unsaved: () => typeof hook.unsaved === 'function' && !!hook.unsaved(),
+  };
+}
+
 /**
  * The server copy of the game's progress, for the launcher tile and a cross-device
- * max-merge. `hook` is the game's `window.__wfProgress` ({ learner, storyCount, get, set }).
+ * max-merge, with a kit that is not versioned (kept as it was before cross-device sync).
+ * `hook` is the game's `window.__wfProgress` ({ learner, storyCount, get, set }).
  * `start()` (inside the tracked start-up): the first `kit.load()`, a max-merge into the
  * game's in-memory counts (which already include answers made while the kit started),
  * stored through `hook.set`, then one publish, so existing progress reaches the tile with
@@ -344,7 +528,7 @@ export function createPublisher(publish, { track: trackRun = trackPending } = {}
  * fewer answers never overwrites a higher server copy. Refused under an account switch,
  * like `award`.
  */
-export function progressSync(kit, hook, { cookie = () => document.cookie, onMismatch = () => {}, isRestarting = () => false, track: trackRun = trackPending } = {}) {
+function maxMergeProgressSync(kit, hook, { cookie = () => document.cookie, onMismatch = () => {}, isRestarting = () => false, track: trackRun = trackPending } = {}) {
   let open = false;
   const publisher = createPublisher(async (snapshot) => {
     if (isRestarting()) return;
@@ -376,5 +560,8 @@ export function progressSync(kit, hook, { cookie = () => document.cookie, onMism
     publish(snapshot) {
       if (open) publisher.request(snapshot);
     },
+    /** Nothing to pick up without a versioned kit. */
+    async refresh() {},
+    unsaved: () => typeof hook.unsaved === 'function' && !!hook.unsaved(),
   };
 }

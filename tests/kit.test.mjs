@@ -629,3 +629,289 @@ test('Review Focus 2: v1 progress on both devices at switch-on is not doubled (l
   assert.deepEqual(m, { v: 2, correct: { legacy: 11, 's.pc': 1 } });
   assert.equal(syncTotal(m), 12, 'the larger legacy total plus this device\'s new answer');
 });
+
+// ---- cross-device sync, Plan 3: progressSync with a versioned kit (Task 2) ----
+
+const ARRIVAL = 'Updated with your work from your other device.';
+const SAFE_MODE = "Can't sync on this device right now. Your work is kept here.";
+
+/** A versioned kit over one shared server copy: saves merge into it and answer `merged`. */
+function fakeVersionedKit(server, { deviceId = 'pc', broken = false } = {}) {
+  const calls = { saves: [], toasts: [], refreshes: 0 };
+  const kit = {
+    mock: true, deviceId, syncBroken: broken, user: { id: 'u1' },
+    load: async () => server.state,
+    save: async (state, summary) => {
+      calls.saves.push({ state, summary });
+      const merged = mergeSync(server.state, state);
+      server.state = merged;
+      return { stored: 'server', merged };
+    },
+    refresh: async (current) => {
+      calls.refreshes++;
+      const m = mergeSync(current, server.state);
+      return JSON.stringify(m) !== JSON.stringify(syncState(current)) ? { changed: true, state: m } : { changed: false };
+    },
+    toast: (t) => calls.toasts.push(t),
+    award: async () => ({}),
+  };
+  return { kit, calls };
+}
+/** The game hook's synced-state side; `markUnsaved` simulates a failed local entry write. */
+function fakeHook(state) {
+  let st = syncState(state);
+  let unsaved = false;
+  const hook = {
+    learner: 'u1', storyCount: 12, markUnsaved: false, acks: [],
+    getState: () => st,
+    setState: (x) => { st = mergeSync(st, x); },
+    addCorrect: (bucket) => {
+      st = mergeSync(st, { v: 2, correct: { [bucket]: (st.correct[bucket] ?? 0) + 1 } });
+      unsaved = hook.markUnsaved;
+      return st;
+    },
+    unsaved: () => unsaved,
+    clearUnsaved: () => { unsaved = false; },
+    acknowledged: (ack) => { hook.acks.push(ack); },
+    get: () => ({ correctTotal: syncTotal(st), storiesUnlocked: storiesFor(syncTotal(st), 12) }),
+  };
+  return hook;
+}
+const settle = () => new Promise((r) => setTimeout(r, 50));
+const VOPTS = (extra = {}) => ({ cookie: () => '', track: localTrack().track, ...extra });
+
+test('versioned: answers made while the first load is pending still count (no subtraction from a stale total)', async () => {
+  const server = { state: { v: 2, correct: { legacy: 10, 'phone.a': 4 } } };
+  const { kit, calls } = fakeVersionedKit(server);
+  const hook = fakeHook({ v: 2, correct: { legacy: 10 } });
+  hook.addCorrect('pc.s1'); hook.addCorrect('pc.s1'); // two answers before start
+  const sync = progressSync(kit, hook, VOPTS());
+  await sync.start(); await settle();
+  assert.equal(hook.get().correctTotal, 16);
+  assert.equal(syncTotal(server.state), 16);
+  assert.ok(calls.toasts.includes(ARRIVAL), 'the phone’s answers arrived');
+  assert.deepEqual(calls.saves.at(-1).summary, { headline: '16 words forged · 5 of 12 stories', percent: 42 });
+});
+
+test('versioned: a session bucket is never renamed, so a provisional count cannot be counted twice', async () => {
+  const server = { state: { v: 2, correct: { legacy: 3 } } };
+  const tabA = fakeVersionedKit(server), tabB = fakeVersionedKit(server);
+  const hookA = fakeHook(server.state);
+  hookA.addCorrect('s.A');
+  const hookB = fakeHook(hookA.getState());
+  const b = progressSync(tabB.kit, hookB, VOPTS()); await b.start();
+  const a = progressSync(tabA.kit, hookA, VOPTS()); await a.start(); await settle();
+  assert.equal(syncTotal(server.state), 4);
+});
+
+test('versioned: two tabs in one browser count in separate session buckets', async () => {
+  const server = { state: { v: 2, correct: { legacy: 10 } } };
+  const tabA = fakeVersionedKit(server), tabB = fakeVersionedKit(server);
+  const hookA = fakeHook(server.state), hookB = fakeHook(server.state);
+  const a = progressSync(tabA.kit, hookA, VOPTS()), b = progressSync(tabB.kit, hookB, VOPTS());
+  await a.start(); await b.start();
+  hookA.addCorrect('s.A'); a.publish(); hookB.addCorrect('s.B'); b.publish(); await settle();
+  assert.equal(syncTotal(server.state), 12);
+});
+
+test('versioned: a save whose result carries `merged` adopts it, with the notice', async () => {
+  const server = { state: { v: 2, correct: {} } };
+  const { kit, calls } = fakeVersionedKit(server);
+  const hook = fakeHook(server.state);
+  const sync = progressSync(kit, hook, VOPTS());
+  await sync.start();
+  server.state = { v: 2, correct: { 's.phone': 3 } }; // the phone saved meanwhile
+  hook.addCorrect('s.pc'); sync.publish(); await settle();
+  assert.equal(hook.get().correctTotal, 4);
+  assert.deepEqual(calls.toasts, [ARRIVAL]);
+});
+
+test('Review Focus 3: a tab left open picks up the other device on refresh, with the notice', async () => {
+  const server = { state: { v: 2, correct: { legacy: 10 } } };
+  const pc = fakeVersionedKit(server, { deviceId: 'pc' });
+  const pcHook = fakeHook(server.state);
+  const pcSync = progressSync(pc.kit, pcHook, VOPTS());
+  await pcSync.start();
+  server.state = mergeSync(server.state, { v: 2, correct: { 'phone.x': 5 } });
+  await pcSync.refresh();
+  assert.equal(pcHook.get().correctTotal, 15);
+  assert.equal(pcHook.get().storiesUnlocked, 5);
+  assert.ok(pc.calls.toasts.includes(ARRIVAL));
+  await pcSync.refresh();
+  assert.equal(pc.calls.toasts.filter((t) => t === ARRIVAL).length, 1, 'no notice when nothing arrived');
+});
+
+test('versioned: refresh is skipped while a publish is in flight', async () => {
+  const server = { state: { v: 2, correct: {} } };
+  const { kit, calls } = fakeVersionedKit(server);
+  let release; const gate = new Promise((r) => { release = r; });
+  const realSave = kit.save;
+  kit.save = async (st, sum) => { await gate; return realSave(st, sum); };
+  const hook = fakeHook(server.state);
+  const sync = progressSync(kit, hook, VOPTS());
+  await sync.start();
+  hook.addCorrect('s.a'); sync.publish();
+  await sync.refresh();
+  assert.equal(calls.refreshes, 0);
+  release(); await settle();
+  await sync.refresh();
+  assert.equal(calls.refreshes, 1);
+});
+
+test('versioned: startup always publishes non-empty local state and retries until the server acknowledges', async () => {
+  const server = { state: { v: 2, correct: { 's.old': 1 } } };
+  const { kit } = fakeVersionedKit(server);
+  let offline = true; const realSave = kit.save; const saves = [];
+  kit.save = async (st, sum) => { saves.push(st); return offline ? { stored: 'local' } : realSave(st, sum); };
+  const hook = fakeHook({ v: 2, correct: { 's.old': 1 } });
+  const win = new EventTarget();
+  const sync = progressSync(kit, hook, VOPTS({ win }));
+  await sync.start(); await settle();
+  assert.equal(saves.length, 1, 'published although the server already holds the same state (CDS3-011)');
+  offline = false; win.dispatchEvent(new Event('online')); await settle();
+  assert.equal(saves.length, 2);
+  win.dispatchEvent(new Event('online')); await settle();
+  assert.equal(saves.length, 2, 'acknowledged: no more retries');
+  assert.equal(hook.acks.length, 1, 'the acknowledgement reaches the hook for cleanup');
+});
+
+test('versioned: a save that stayed local is retried on reconnect without another answer', async () => {
+  const server = { state: { v: 2, correct: {} } };
+  const { kit } = fakeVersionedKit(server);
+  let offline = true;
+  const realSave = kit.save;
+  kit.save = async (st, sum) => (offline ? { stored: 'local' } : realSave(st, sum));
+  const hook = fakeHook(server.state);
+  const win = new EventTarget();
+  const sync = progressSync(kit, hook, VOPTS({ win }));
+  await sync.start(); hook.addCorrect('s.pc'); sync.publish(); await settle();
+  assert.equal(syncTotal(server.state), 0);
+  assert.equal(hook.acks.length, 0, 'no cleanup without a server acknowledgement');
+  offline = false; win.dispatchEvent(new Event('online')); await settle();
+  assert.equal(syncTotal(server.state), 1);
+});
+
+test('versioned: the retry also runs every 30 s on one timer, which stops once acknowledged', async () => {
+  const server = { state: { v: 2, correct: {} } };
+  const { kit } = fakeVersionedKit(server);
+  let offline = true;
+  const realSave = kit.save;
+  kit.save = async (st, sum) => (offline ? { stored: 'none' } : realSave(st, sum));
+  const timers = new Map(); let nextId = 1;
+  const setIntervalFn = (fn, ms) => { const id = nextId++; timers.set(id, { fn, ms }); return id; };
+  const clearIntervalFn = (id) => { timers.delete(id); };
+  const hook = fakeHook(server.state);
+  const sync = progressSync(kit, hook, VOPTS({ win: new EventTarget(), setInterval: setIntervalFn, clearInterval: clearIntervalFn }));
+  await sync.start(); hook.addCorrect('s.pc'); sync.publish(); await settle();
+  hook.addCorrect('s.pc'); sync.publish(); await settle();
+  assert.equal(timers.size, 1, 'one timer');
+  assert.equal([...timers.values()][0].ms, 30_000);
+  offline = false;
+  [...timers.values()][0].fn(); await settle();
+  assert.equal(syncTotal(server.state), 2);
+  assert.equal(timers.size, 0, 'stopped');
+});
+
+test('versioned: an acknowledgement that contains the current state clears the unsaved status', async () => {
+  const server = { state: { v: 2, correct: {} } };
+  const { kit } = fakeVersionedKit(server);
+  const hook = fakeHook(server.state);
+  const sync = progressSync(kit, hook, VOPTS());
+  await sync.start();
+  hook.markUnsaved = true; hook.addCorrect('s.a');
+  assert.equal(sync.unsaved(), true);
+  sync.publish(); await settle();
+  assert.equal(sync.unsaved(), false);
+});
+
+test('versioned: an acknowledgement of an older snapshot never clears the unsaved status', async () => {
+  const server = { state: { v: 2, correct: {} } };
+  const { kit } = fakeVersionedKit(server);
+  let release; const gate = new Promise((r) => { release = r; });
+  const realSave = kit.save; let n = 0;
+  kit.save = async (st, sum) => { n++; if (n === 1) { await gate; return realSave(st, sum); } return { stored: 'none' }; };
+  const hook = fakeHook(server.state);
+  const sync = progressSync(kit, hook, VOPTS({ win: new EventTarget() }));
+  await sync.start(); hook.addCorrect('s.a'); sync.publish();
+  hook.markUnsaved = true; hook.addCorrect('s.a'); sync.publish(); // S2: its local write failed
+  release(); await settle();
+  assert.equal(n, 2);
+  assert.equal(sync.unsaved(), true);
+});
+
+test('Review Focus 5: safe mode is announced once, retries stop, and the page keeps working locally', async () => {
+  const server = { state: { v: 2, correct: {} } };
+  const { kit, calls } = fakeVersionedKit(server, { broken: true });
+  kit.save = async (st, sum) => { calls.saves.push({ st, sum }); return { stored: 'local' }; };
+  const timers = new Map(); let nextId = 1;
+  const win = new EventTarget();
+  const hook = fakeHook(server.state);
+  const sync = progressSync(kit, hook, VOPTS({ win, setInterval: (fn, ms) => { const id = nextId++; timers.set(id, fn); return id; }, clearInterval: (id) => timers.delete(id) }));
+  await sync.start(); await sync.refresh();
+  hook.addCorrect('s.a'); sync.publish(); await settle();
+  win.dispatchEvent(new Event('online')); await settle();
+  assert.deepEqual(calls.toasts.filter((t) => t.startsWith("Can't sync")), [SAFE_MODE]);
+  assert.equal(timers.size, 0, 'no retry timer in safe mode');
+  assert.equal(calls.saves.length, 1, 'no retry on online in safe mode');
+  assert.equal(hook.get().correctTotal, 1, 'the answer still counts here');
+});
+
+test('versioned: safe mode entered by a later save is announced then, once', async () => {
+  const server = { state: { v: 2, correct: {} } };
+  const { kit, calls } = fakeVersionedKit(server);
+  kit.save = async () => { kit.syncBroken = true; return { stored: 'local' }; };
+  const hook = fakeHook(server.state);
+  const sync = progressSync(kit, hook, VOPTS({ win: new EventTarget() }));
+  await sync.start();
+  assert.deepEqual(calls.toasts, []);
+  hook.addCorrect('s.a'); sync.publish(); await settle();
+  hook.addCorrect('s.a'); sync.publish(); await settle();
+  await sync.refresh();
+  assert.deepEqual(calls.toasts, [SAFE_MODE]);
+});
+
+test('versioned: refused for another learner, as before', async () => {
+  const server = { state: { v: 2, correct: {} } };
+  const { kit, calls } = fakeVersionedKit(server);
+  kit.mock = false;
+  let mismatches = 0;
+  const hook = fakeHook({ v: 2, correct: { 's.a': 1 } });
+  const sync = progressSync(kit, hook, VOPTS({ cookie: () => cookieFor('u2'), onMismatch: () => { mismatches++; } }));
+  await sync.start(); await settle();
+  assert.equal(mismatches, 1);
+  assert.equal(calls.saves.length, 0);
+});
+
+test('initKit opts in to the versioned kit with the merge and a summary over the story count', async () => {
+  let opts = null;
+  const kit = { user: { id: 'u1' } };
+  const r = await initKit({ hostname: 'wordforge.travelschooling.com', TSKit: { init: async (o) => { opts = o; return kit; } }, storyCount: 18, win: {} });
+  assert.equal(r.kit, kit);
+  assert.equal(opts.game, GAME);
+  assert.equal(opts.merge, mergeSync);
+  assert.deepEqual(opts.summarize({ v: 2, correct: { a: 4, b: 3 } }), { headline: '7 words forged · 2 of 18 stories', percent: 11 });
+});
+
+test('initKit uses window.__tsTestKit (e2e seam) instead of the localhost mock', async () => {
+  let opts = null;
+  const kit = { user: { id: 'dev' }, mock: true };
+  const win = { __tsTestKit: { init: async (o) => { opts = o; return kit; } } };
+  const r = await initKit({ hostname: 'localhost', storyCount: 18, win });
+  assert.equal(r.kit, kit);
+  assert.equal(opts.merge, mergeSync);
+});
+
+test('the localhost mock opts in too: versioned, merges saves, answers merged, refreshes', async () => {
+  const win = {};
+  const r = await initKit({ hostname: 'localhost', storyCount: 18, win });
+  const kit = r.kit;
+  assert.equal(typeof kit.refresh, 'function');
+  assert.equal(typeof kit.deviceId, 'string');
+  assert.equal(kit.syncBroken, false);
+  assert.deepEqual(await kit.load(), {});
+  assert.deepEqual(await kit.save({ v: 2, correct: { a: 2 } }, { headline: 'x' }), { stored: 'server' });
+  assert.deepEqual(await kit.save({ v: 2, correct: { b: 1 } }, { headline: 'y' }), { stored: 'server', merged: { v: 2, correct: { a: 2, b: 1 } } });
+  assert.deepEqual(await kit.refresh({ v: 2, correct: { b: 1 } }), { changed: true, state: { v: 2, correct: { a: 2, b: 1 } } });
+  assert.deepEqual(await kit.refresh({ v: 2, correct: { a: 2, b: 1 } }), { changed: false });
+  assert.equal(win.__kitSaves.length, 2);
+});

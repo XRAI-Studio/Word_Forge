@@ -17,12 +17,18 @@
  *      unscoped progress record, holds the mock's first load open and leaves during it:
  *      the record is claimed by the learner, and the start-up's first save (existing
  *      progress, no play) still happens before the navigation (R001, R007).
+ *      Cross-device sync (Plan 3, CDS3-007): two browser contexts ("pc", "phone") share one
+ *      in-node versioned store through the window.__tsTestKit seam; the phone's answers
+ *      reach the pc tab when it is shown again, an answer made while the pc's kit is
+ *      offline is sent on the `online` event with no further answer, and the pc page
+ *      reopened with its kit offline shows the total from its local synced state.
  *
  *   npm run e2e            (needs `npx playwright install chromium` once)
  */
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import net from "node:net";
 import { chromium, type Page } from "playwright";
+import { mergeSync, syncTotal } from "../public/kit.js";
 
 const PORTAL_LOGIN = "https://class.travelschooling.com/login?next=";
 const HOME_ROOM = "https://class.travelschooling.com/";
@@ -144,7 +150,8 @@ async function gateInProductionMode() {
 // ---------------------------------------------------------------- part (b)
 
 type Award = { event: string; detail: Record<string, unknown> };
-type Save = { state: { rev: number; storiesUnlocked: number; correctTotal: number }; summary: { headline: string; percent: number } };
+type SyncedState = { v: 2; correct: Record<string, number> };
+type Save = { state: SyncedState; summary: { headline: string; percent: number } };
 type Win = Window & {
   __kitAwards?: Award[];
   __kitSaves?: Save[];
@@ -233,11 +240,163 @@ async function leaveDuringDelayedFirstLoad(browser: Awaited<ReturnType<typeof ch
     expectEq(recorded.length, 1, "exactly one start-up save");
     expectEq(navigatedAfter, 1, "the start-up save happened before the navigation");
     expectEq(recorded[0].summary.headline, "4 words forged · 1 of 18 stories", "start-up save headline");
-    expectEq(recorded[0].state.rev, 4, "rev = correctTotal");
+    expectEq(syncTotal(recorded[0].state), 4, "the synced state holds the legacy total");
+    expectEq(recorded[0].state.correct.legacy, 4, "as the legacy bucket");
     expectEq(errors.length, 0, `page errors: ${errors.join(" | ")}`);
     log('dev: legacy progress claimed by the learner; leaving during a held first load waits for it, and the start-up save ("4 words forged · 1 of 18 stories") lands before navigating');
   } finally {
     await context.close();
+  }
+}
+
+declare const correctTotal: number;
+type TestKitWin = Window & {
+  __toasts: string[];
+  __wfSyncStarted?: boolean;
+  __tsTestKit?: unknown;
+  __e2eStoreLoad: () => Promise<{ offline: boolean; state: unknown; version: number }>;
+  __e2eStoreSave: (state: unknown, version: number) => Promise<{ stored: string; merged?: unknown; version?: number }>;
+};
+
+const ARRIVAL = "Updated with your work from your other device.";
+
+/**
+ * Review Focus 3 and CDS3-004/007, on two browser contexts sharing one in-node store.
+ *
+ * The store is versioned like `save_progress_versioned`: a save names the version its page
+ * last saw; a stale one is a conflict, which (as the kit does) is combined with the store's
+ * copy and saved again. The seam's kit is versioned (deviceId, refresh, `merged` results)
+ * and has a per-context offline switch: offline, load answers `{}`, saves stay "local" and
+ * refresh reports no change. Only the kit is offline, so the page itself still loads.
+ */
+async function crossDeviceSync(browser: Awaited<ReturnType<typeof chromium.launch>>, base: string) {
+  let store: SyncedState = { v: 2, correct: {} };
+  let version = 0;
+  let conflicts = 0;
+  const offline: Record<string, boolean> = { pc: false, phone: false };
+  const opened: Awaited<ReturnType<typeof browser.newContext>>[] = [];
+  const errors: string[] = [];
+
+  async function device(name: "pc" | "phone"): Promise<Page> {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    opened.push(context);
+    await context.exposeFunction("__e2eStoreLoad", () => ({ offline: offline[name], state: store, version }));
+    await context.exposeFunction("__e2eStoreSave", (state: SyncedState, seen: number) => {
+      if (offline[name]) return { stored: "local" };
+      if (seen !== version) conflicts++; // combined with the newer copy, then saved
+      store = mergeSync(store, state) as SyncedState;
+      version++;
+      return { stored: "server", merged: store, version };
+    });
+    // tsx (esbuild, keepNames) wraps named inner functions in `__name(...)`, a helper the page
+    // does not have: give it one before the seam's init script runs.
+    await context.addInitScript({ content: "window.__name = window.__name || ((f) => f);" });
+    await context.addInitScript((deviceId: string) => {
+      const w = window as unknown as TestKitWin;
+      w.__toasts = [];
+      type Merge = (a: unknown, b: unknown) => unknown;
+      const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+      w.__tsTestKit = {
+        init: async ({ merge }: { merge: Merge }) => {
+          let seen = 0;
+          return {
+            mock: true, // no portal cookie on localhost: the account checks pass, as with the mock
+            user: { id: "dev", displayName: "E2E " + deviceId, role: "student" },
+            totals: { xp: 0, gems: 0, level: 1, streak: 0 },
+            launcherUrl: "https://class.travelschooling.com",
+            deviceId,
+            syncBroken: false,
+            load: async () => {
+              const r = await w.__e2eStoreLoad();
+              if (r.offline) return {};
+              seen = r.version;
+              return r.state;
+            },
+            save: async (state: unknown) => {
+              const sent = JSON.parse(JSON.stringify(state));
+              const r = await w.__e2eStoreSave(sent, seen);
+              if (r.stored !== "server") return { stored: r.stored };
+              seen = r.version as number;
+              return same(r.merged, merge(sent, sent)) ? { stored: "server" } : { stored: "server", merged: r.merged };
+            },
+            refresh: async (current: unknown) => {
+              const r = await w.__e2eStoreLoad();
+              if (r.offline || r.version === seen) return { changed: false };
+              seen = r.version;
+              const m = merge(current, r.state);
+              return same(m, merge(current, current)) ? { changed: false } : { changed: true, state: m };
+            },
+            award: async () => ({ awarded_xp: 0, xp: 0, gems: 0, level: 1, streak: 0, level_up: false, new_achievements: [] }),
+            unlock: async () => ({}),
+            toast: (text: string) => { w.__toasts.push(text); },
+          };
+        },
+      };
+    }, name);
+    const page = await context.newPage();
+    page.on("pageerror", (e) => errors.push(`${name}: ${e.message}`));
+    await page.goto(`${base}/`, { waitUntil: "load" });
+    await started(page);
+    return page;
+  }
+  const started = (page: Page) => page.waitForFunction(() => (window as unknown as TestKitWin).__wfSyncStarted === true, null, { timeout: 30_000 });
+  const total = (page: Page) => page.evaluate(() => correctTotal);
+  const answer = (page: Page) => page.evaluate(() => (window as unknown as Win).maybeUnlockStory!());
+  async function storeReaches(n: number, what: string) {
+    const until = Date.now() + 10_000;
+    while (syncTotal(store) !== n) {
+      if (Date.now() > until) throw new Error(`${what}: the store total stayed ${syncTotal(store)}, expected ${n}`);
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+
+  try {
+    const pc = await device("pc");
+    const phone = await device("phone");
+    expectEq(await total(pc), 0, "pc starts empty");
+
+    // The phone answers twice; the pc tab, left open, picks them up when shown again.
+    await answer(phone);
+    await answer(phone);
+    await storeReaches(2, "the phone's answers reach the server");
+    expectEq(await total(pc), 0, "the pc has not looked yet");
+    await pc.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await pc.waitForFunction(() => correctTotal === 2, null, { timeout: 10_000 });
+    expectEq((await pc.evaluate(() => (window as unknown as TestKitWin).__toasts)).includes(ARRIVAL), true, "the pc shows the arrival notice");
+    log("dev (two contexts): the phone answers 2; the pc tab shown again shows +2 and the notice");
+
+    // The pc answers while its kit is offline: kept locally, then sent on `online` alone.
+    offline.pc = true;
+    await answer(pc);
+    await pc.waitForTimeout(500);
+    expectEq(await total(pc), 3, "the pc counts its offline answer");
+    expectEq(syncTotal(store), 2, "nothing reached the server while offline");
+    offline.pc = false;
+    await pc.evaluate(() => window.dispatchEvent(new Event("online")));
+    await storeReaches(3, "reconnecting sends the offline answer with no further answer");
+    log("dev (two contexts): an answer made offline reaches the server on the online event, with no further answer");
+
+    // Reopen the pc page with its kit offline: the total comes from the local synced state.
+    offline.pc = true;
+    await pc.reload({ waitUntil: "load" });
+    await started(pc);
+    expectEq(await total(pc), 3, "reopened offline, the pc shows its local total");
+    expectEq(await pc.locator("#story-count").textContent(), "(1)", "and the story it unlocks");
+    const entries = await pc.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith("wordforge:sync:dev:")).sort());
+    expectEq(entries.includes("wordforge:sync:dev:legacy"), true, `the one-time legacy baseline entry is kept (${entries.join(", ")})`);
+    log("dev (two contexts): reopened with the kit offline, the pc shows 3 from its local synced state");
+
+    // The phone, last in step at version 2, answers again: its save conflicts with the pc's,
+    // is combined, and the phone adopts the pc's answer from the save's result.
+    await answer(phone);
+    await storeReaches(4, "the phone's stale save is combined, not lost");
+    await phone.waitForFunction(() => correctTotal === 4, null, { timeout: 10_000 });
+    expectEq(conflicts >= 1, true, `the stale save was a conflict (${conflicts})`);
+    expectEq((await phone.evaluate(() => (window as unknown as TestKitWin).__toasts)).includes(ARRIVAL), true, "the phone shows the arrival notice");
+    expectEq(errors.length, 0, `page errors: ${errors.join(" | ")}`);
+    log("dev (two contexts): a stale phone save conflicts, is combined to 4, and the phone adopts the pc's answer");
+  } finally {
+    for (const c of opened) await c.close();
   }
 }
 
@@ -322,7 +481,8 @@ async function gameInDevelopmentMode() {
     expectEq(stories[0].detail.story, 1, "first story index");
     log("dev: story_unlocked once after three correct answers");
     const third = await lastSaveIs(page, "3 words forged · 1 of 18 stories");
-    expectEq(third.state.rev, 3, "tile save rev = correctTotal");
+    expectEq(syncTotal(third.state), 3, "tile save: the synced total");
+    expectEq(third.state.v, 2, "tile save: the synced (v2) shape");
     expectEq(third.summary.percent, 6, "tile percent");
     log('dev: tile save "3 words forged · 1 of 18 stories"');
 
@@ -393,6 +553,7 @@ async function gameInDevelopmentMode() {
     log("dev: repository files are 404, the game files are 200");
 
     await leaveDuringDelayedFirstLoad(browser, base);
+    await crossDeviceSync(browser, base);
   } finally {
     try {
       if (browser) await browser.close();

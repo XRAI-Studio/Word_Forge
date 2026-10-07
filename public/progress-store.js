@@ -160,6 +160,209 @@
     return progress;
   }
 
+  // ---- cross-device sync (Plan 3): the synced state, one storage entry per page session ----
+  //
+  // The synced state is `{ v: 2, correct: { [bucket]: n } }` (kit.js has the same algebra as
+  // ES module exports; tests/progress-store.test.mjs checks the two agree). Each page session
+  // counts its correct answers in its own bucket "s.<session>" and writes only its own entry
+  // `wordforge:sync:<learner>:<session>`, synchronously with every answer, so no two tabs ever
+  // write the same key (CDS3-001, CDS3-009). At load every entry of the learner is merged.
+  // The first time a learner has no entry at all, the old aggregate total is written once as
+  // the `:legacy` baseline (CDS3-013); after that the aggregate is never read again. Once the
+  // server has acknowledged a state, a session removes the entries of lower-sorted sessions
+  // that state holds, after writing and reading back its own (CDS3-015).
+
+  var SYNC_PREFIX = "wordforge:sync:";
+  var LEGACY_SESSION = "legacy";
+
+  function own(o, k) {
+    return Object.prototype.hasOwnProperty.call(o, k);
+  }
+  function count(v) {
+    return typeof v === "number" && isFinite(v) ? Math.max(0, Math.floor(v)) : 0;
+  }
+  /** Same as kit.js syncState: v1 becomes the `legacy` bucket, junk is empty, keys sorted. */
+  function syncState(raw) {
+    var r = raw && typeof raw === "object" ? raw : {};
+    if (r.v === 2 && r.correct && typeof r.correct === "object" && !Array.isArray(r.correct)) {
+      var c = r.correct;
+      var entries = [];
+      Object.keys(c).sort().forEach(function (k) {
+        var n = own(c, k) ? c[k] : undefined;
+        if (typeof n === "number" && isFinite(n) && n >= 0) entries.push([k, Math.floor(n)]);
+      });
+      return { v: 2, correct: Object.fromEntries(entries) };
+    }
+    var legacy = count(r.correctTotal);
+    return { v: 2, correct: Object.fromEntries(legacy > 0 ? [["legacy", legacy]] : []) };
+  }
+  /** Same as kit.js mergeSync: per-bucket max, keys sorted. */
+  function mergeSync(a, b) {
+    var x = syncState(a).correct, y = syncState(b).correct;
+    var keys = Object.keys(x).concat(Object.keys(y).filter(function (k) { return !own(x, k); })).sort();
+    return { v: 2, correct: Object.fromEntries(keys.map(function (k) {
+      return [k, Math.max(own(x, k) ? x[k] : 0, own(y, k) ? y[k] : 0)];
+    })) };
+  }
+  function syncTotal(s) {
+    var c = syncState(s).correct;
+    return Object.keys(c).reduce(function (t, k) { return t + c[k]; }, 0);
+  }
+  /** True when the two states are the same once normalized. */
+  function sameSync(a, b) {
+    return JSON.stringify(syncState(a)) === JSON.stringify(syncState(b));
+  }
+  /** True when `big` holds everything in `small`. */
+  function containsSync(big, small) {
+    return sameSync(mergeSync(big, small), big);
+  }
+
+  function syncKey(learner, session) {
+    return SYNC_PREFIX + learner + ":" + session;
+  }
+  function parseEntry(raw) {
+    if (!raw) return null;
+    try {
+      var v = JSON.parse(raw);
+      return v && typeof v === "object" ? v : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  /** Every sync entry key of this learner (not of a learner whose id merely starts the same). */
+  function syncKeys(storage, learner) {
+    var prefix = SYNC_PREFIX + learner + ":";
+    var keys = [];
+    for (var i = 0; i < storage.length; i++) {
+      var k = storage.key(i);
+      if (k && k.indexOf(prefix) === 0 && k.slice(prefix.length).indexOf(":") < 0) keys.push(k);
+    }
+    return keys;
+  }
+
+  /**
+   * The learner's synced state at page load: the merge of every `wordforge:sync:<learner>:*`
+   * entry. With no entry at all, `legacyTotal` (the old aggregate's total) is written once as
+   * the `:legacy` baseline, even when 0, so it is never imported again (CDS3-013). No learner:
+   * nothing is read or written. Unreadable storage: the baseline, in memory only.
+   */
+  function loadSync(getStorage, learner, legacyTotal) {
+    if (!learner) return syncState(null);
+    var baseline = syncState({ correctTotal: legacyTotal });
+    try {
+      var storage = getStorage();
+      var keys = syncKeys(storage, learner);
+      if (keys.length === 0) {
+        try { storage.setItem(syncKey(learner, LEGACY_SESSION), JSON.stringify(baseline)); } catch (e) {}
+        return baseline;
+      }
+      var state = syncState(null);
+      keys.forEach(function (k) {
+        var e = parseEntry(storage.getItem(k));
+        if (e) state = mergeSync(state, e);
+      });
+      return state;
+    } catch (e) {
+      return baseline;
+    }
+  }
+
+  /**
+   * Writes this session's entry only; true when it was written. No learner: nothing is
+   * written, and a non-empty state then exists only in memory, which is unsaved.
+   */
+  function saveSync(getStorage, learner, session, state) {
+    if (!learner) return syncTotal(state) === 0;
+    try {
+      getStorage().setItem(syncKey(learner, session), JSON.stringify(syncState(state)));
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /**
+   * After the server acknowledged `ack` (CDS3-015): writes this session's entry with
+   * merge(current, ack) and reads it back; only when that succeeded, removes each entry of a
+   * session whose id sorts lower than this one (so two tabs never remove each other's, and
+   * the highest session's entry always survives), that `ack` and the read-back entry both
+   * hold, and that is unchanged on an immediate re-read. The legacy baseline is never
+   * removed. Returns { written, state, removed }.
+   */
+  function cleanupSync(getStorage, learner, session, ack, current) {
+    var result = { written: false, state: mergeSync(current, ack), removed: [] };
+    if (!learner) return result;
+    try {
+      var storage = getStorage();
+      var ownKey = syncKey(learner, session);
+      storage.setItem(ownKey, JSON.stringify(result.state));
+      var back = parseEntry(storage.getItem(ownKey));
+      if (!back || !sameSync(back, result.state)) return result;
+      result.written = true;
+      var prefix = SYNC_PREFIX + learner + ":";
+      syncKeys(storage, learner).forEach(function (k) {
+        var sid = k.slice(prefix.length);
+        if (sid === session || sid === LEGACY_SESSION || !(sid < session)) return;
+        var raw = storage.getItem(k);
+        var e = parseEntry(raw);
+        if (!e || !containsSync(ack, e) || !containsSync(back, e)) return;
+        if (storage.getItem(k) !== raw) return;
+        storage.removeItem(k);
+        result.removed.push(k);
+      });
+    } catch (e) {
+      // storage unavailable: nothing more is removed
+    }
+    return result;
+  }
+
+  /**
+   * One page session's synced progress: `state` (loaded at creation), the bucket
+   * "s.<session>", and the unsaved status the leave guard reads (CDS3-012): set when writing
+   * the session's entry fails, cleared when a later write of it succeeds or by clearUnsaved()
+   * (a server acknowledgement that contains the current state, decided by kit.js).
+   */
+  function createSyncSession(opts) {
+    var getStorage = opts.getStorage, learner = opts.learner, session = opts.session;
+    var bucket = "s." + session;
+    var state = loadSync(getStorage, learner, opts.legacyTotal);
+    var unsaved = false;
+    function write() {
+      var ok = saveSync(getStorage, learner, session, state);
+      unsaved = !ok;
+      return ok;
+    }
+    return {
+      session: session,
+      bucket: bucket,
+      getState: function () { return state; },
+      /** One more correct answer in this session's bucket, written at once; the new state. */
+      addCorrect: function () {
+        var n = own(state.correct, bucket) ? state.correct[bucket] : 0;
+        state = mergeSync(state, { v: 2, correct: Object.fromEntries([[bucket, n + 1]]) });
+        write();
+        return state;
+      },
+      /** Adopts another copy (only ever merges in), written at once; the new state. */
+      setState: function (next) {
+        state = mergeSync(state, next);
+        write();
+        return state;
+      },
+      unsaved: function () { return unsaved; },
+      clearUnsaved: function () { unsaved = false; },
+      /** Writes the entry again; true when it was written. */
+      retry: function () { return write(); },
+      /** The server holds `ack`: write this entry, then clean up (cleanupSync). */
+      acknowledged: function (ack) {
+        var r = cleanupSync(getStorage, learner, session, ack, state);
+        state = r.state;
+        if (r.written) unsaved = false;
+        return r;
+      },
+    };
+  }
+
   root.WF_PROGRESS = {
     createProgressSaver: createProgressSaver,
     sessionUserId: sessionUserId,
@@ -168,5 +371,14 @@
     loadLearnerProgress: loadLearnerProgress,
     LEGACY_KEY: LEGACY_KEY,
     CLAIM_KEY: CLAIM_KEY,
+    SYNC_PREFIX: SYNC_PREFIX,
+    syncState: syncState,
+    mergeSync: mergeSync,
+    syncTotal: syncTotal,
+    syncKey: syncKey,
+    loadSync: loadSync,
+    saveSync: saveSync,
+    cleanupSync: cleanupSync,
+    createSyncSession: createSyncSession,
   };
 })(typeof self !== "undefined" ? self : globalThis);

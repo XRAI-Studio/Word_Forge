@@ -262,7 +262,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--sun);outline-of
 <div id="kit-banner" style="display:none;position:fixed;left:0;right:0;top:0;z-index:9999;padding:10px 16px;background:#1b1b1b;color:#fff;font:600 15px system-ui,sans-serif;text-align:center"></div>
 <script src="https://class.travelschooling.com/kit/v1/ts-kit.js"></script>
 <script type="module">
-import { initKit, award, sameAccount, flushAwards, accountChangeRestart, progressSync, trackPending } from './kit.js?v=7';
+import { initKit, award, sameAccount, flushAwards, accountChangeRestart, progressSync, trackPending } from './kit.js?v=8';
 // The Home Room button waits (bounded) for awards still in flight. Installed before the kit
 // starts so the button works whatever the kit's outcome.
 window.__wfFlushAwards = (timeoutMs) => flushAwards(timeoutMs);
@@ -287,7 +287,7 @@ window.__wfPublish = (snapshot) => { tileSync?.publish(snapshot); };
 // the game's progress and the first publish, so the Home Room button waits for all of it
 // within its bounded deadline.
 async function startUp() {
-const start = await initKit();
+const start = await initKit({ storyCount: window.__wfProgress ? window.__wfProgress.storyCount : undefined });
 if (start.kind === 'redirecting') {
   showBanner('Sending you to sign in…');
 } else if (start.kind === 'unavailable') {
@@ -311,15 +311,21 @@ if (start.kind === 'redirecting') {
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') check(); });
   window.addEventListener('focus', check);
   if (window.__wfProgress) {
-    tileSync = progressSync(kit, window.__wfProgress, { onMismatch: restart, isRestarting: restarter.isRestarting });
+    tileSync = progressSync(kit, window.__wfProgress, { onMismatch: restart, isRestarting: restarter.isRestarting, win: window });
+    // Back on the page (tab shown again, or restored from the back/forward cache): pick up the
+    // other device's work (skipped while a save is in flight, and before the start-up ends).
+    const refresh = () => { void tileSync.refresh(); };
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refresh(); });
+    window.addEventListener('pageshow', refresh);
     await tileSync.start();
+    window.__wfSyncStarted = true; // e2e: the start-up merge and first publish are done
   }
 }
 }
 await trackPending(startUp());
 </script>
-<script src="progress-store.js?v=7"></script>
-<script src="leave-guard.js?v=7"></script>
+<script src="progress-store.js?v=8"></script>
+<script src="leave-guard.js?v=8"></script>
 <script>
 /* ============ DATA ============ */
 const PREFIXES = [
@@ -1095,52 +1101,89 @@ let storiesUnlocked=0, correctTotal=0;
 /* Saved progress. Only the cumulative unlock state belongs here: score,
    streak and round are reset by setMode on purpose. Every access is
    guarded, since localStorage throws outright in some privacy modes.
-   A failed write marks progress unsaved (the Home Room button warns);
-   every later save retries the full snapshot (progress-store.js).
    Progress is per learner: the key carries the session cookie's user id
    (`dev` on localhost), known synchronously here; the legacy unscoped
    record is claimed once by the first learner (progress-store.js). With
-   no readable id, progress stays in memory only. Each save also goes to
-   the portal for the launcher tile (window.__wfPublish, set by the kit
-   module), which max-merges the server copy in at start-up through
+   no readable id, progress stays in memory only.
+   Cross-device sync (Plan 3): the progress that counts is the synced state
+   { v: 2, correct: { [bucket]: n } } (progress-store.js). This page session
+   counts its correct answers in its own bucket "s.<SESSION>" and writes
+   its own storage entry with every answer; the total is the sum of every
+   bucket and the stories follow it (one per three answers). A failed write
+   of that entry marks progress unsaved (the Home Room button warns); it
+   clears when a later write succeeds or the server holds this state. The
+   old aggregate record { storiesUnlocked, correctTotal } is still written
+   for pages from before this change, and read once, as the legacy baseline.
+   Each save also goes to the portal (window.__wfPublish, set by the kit
+   module), which merges in the other device's work through
    window.__wfProgress below. */
 const LEARNER=WF_PROGRESS.learnerId(document.cookie, location.hostname);
 const PROGRESS_KEY=LEARNER ? WF_PROGRESS.progressKey(LEARNER) : null;
 const progressSaver=WF_PROGRESS.createProgressSaver(()=>localStorage, PROGRESS_KEY);
-function saveProgress(){
+/* This page session's id, chosen at load before any answer; it never changes. */
+const SESSION=(function(){ let s=""; while(!s || s==="legacy") s=Math.random().toString(36).slice(2,10); return s; })();
+let SYNC=null; // this session's synced progress, from loadProgress()
+function applySync(){
+  correctTotal=WF_PROGRESS.syncTotal(SYNC.getState());
+  storiesUnlocked=Math.min(STORIES.length, Math.floor(correctTotal/3));
+}
+function showSync(){
+  applySync();
+  updateStoryCount();
+  if(mode==="stories") renderStories();
+}
+function saveProgress(publish=true){
   const snapshot={storiesUnlocked, correctTotal};
-  const ok=progressSaver.save(snapshot);
+  progressSaver.save(snapshot);
   syncLeaveGuard();
-  window.__wfPublish?.(snapshot);
-  return ok;
+  if(publish) window.__wfPublish?.(snapshot);
+  return !SYNC.unsaved();
 }
 function loadProgress(){
   const saved=WF_PROGRESS.loadLearnerProgress(()=>localStorage, LEARNER, STORIES.length);
-  storiesUnlocked=saved.storiesUnlocked;
-  correctTotal=saved.correctTotal;
+  SYNC=WF_PROGRESS.createSyncSession({getStorage:()=>localStorage, learner:LEARNER, session:SESSION, legacyTotal:saved.correctTotal});
+  applySync();
 }
-/* Kit hook (module bootstrap): read the in-memory counts, and store the
-   max-merge with the server copy (it only ever raises them). */
+/* Kit hook (module bootstrap, kit.js progressSync). getState/setState: the
+   synced state; setState only ever merges in (another device's work) and is
+   not published again. addCorrect: one answer in this session's bucket.
+   get/set: the totals, for a kit without cross-device sync (set raises the
+   legacy bucket so the total reaches the server copy's). */
 window.__wfProgress={
   learner: LEARNER,
   storyCount: STORIES.length,
   get: ()=>({storiesUnlocked, correctTotal}),
   set: (p)=>{
-    storiesUnlocked=p.storiesUnlocked;
-    correctTotal=p.correctTotal;
-    updateStoryCount();
-    if(mode==="stories") renderStories();
+    const extra=(p && typeof p.correctTotal==="number" ? Math.floor(p.correctTotal) : 0)-correctTotal;
+    if(extra>0){
+      const c=SYNC.getState().correct;
+      const legacy=Object.prototype.hasOwnProperty.call(c,"legacy") ? c.legacy : 0;
+      SYNC.setState({v:2, correct:Object.fromEntries([["legacy", legacy+extra]])});
+    }
+    showSync();
     saveProgress();
+  },
+  getState: ()=>SYNC.getState(),
+  setState: (next)=>{ SYNC.setState(next); showSync(); saveProgress(false); },
+  addCorrect: ()=>{ const st=SYNC.addCorrect(); applySync(); return st; },
+  unsaved: ()=>SYNC.unsaved(),
+  clearUnsaved: ()=>{ SYNC.clearUnsaved(); syncLeaveGuard(); },
+  acknowledged: (ack)=>{
+    const before=correctTotal;
+    SYNC.acknowledged(ack);
+    if(WF_PROGRESS.syncTotal(SYNC.getState())!==before){ showSync(); saveProgress(false); }
+    else syncLeaveGuard();
   },
 };
 function updateStoryCount(){ $("story-count").textContent = storiesUnlocked?("("+storiesUnlocked+")"):""; }
 function maybeUnlockStory(){
-  correctTotal++;
-  if(correctTotal%3===0 && storiesUnlocked<STORIES.length){
-    storiesUnlocked++;
+  const before=storiesUnlocked;
+  window.__wfProgress.addCorrect();
+  if(storiesUnlocked>before){
     window.__wfAward?.('story_unlocked',{story:storiesUnlocked});
     updateStoryCount();
-    setTimeout(()=>showStoryModal(storiesUnlocked-1,true),900);
+    const idx=storiesUnlocked-1;
+    setTimeout(()=>showStoryModal(idx,true),900);
   }
   saveProgress();
 }
@@ -1238,7 +1281,8 @@ const meaningOf=(list,key)=>{const f=list.find(x=>x[0]===key);return f?f[1]:"";}
 
 /* ============ RETURN TO HOME ROOM ============ */
 /* Unsaved work is a half-built word in the Forge (picks placed, not yet
-   snapped) or progress whose last localStorage write failed. While there is
+   snapped) or progress whose synced entry could not be written (and that the
+   server does not hold yet, see progress-store.js). While there is
    some, the browser's own leave prompt is armed; the button shows an in-page
    dialog instead. With none, the button waits (at most 2 s) for awards still
    in flight, then goes home. The arming, the departure latch and the
@@ -1248,7 +1292,7 @@ let leaveReturnFocus=null;
 function wordHalfBuilt(){
   return mode==="forge" && !answered && !!(forgePicks.prefix||forgePicks.stem||forgePicks.suffix);
 }
-function hasUnsavedWork(){ return wordHalfBuilt() || progressSaver.unsaved(); }
+function hasUnsavedWork(){ return wordHalfBuilt() || SYNC.unsaved(); }
 const leaveGuard=WF_LEAVE.createLeaveGuard({
   win: window,
   hasUnsavedWork,
@@ -1256,7 +1300,7 @@ const leaveGuard=WF_LEAVE.createLeaveGuard({
   flush: ()=> typeof window.__wfFlushAwards==="function" ? window.__wfFlushAwards(2000) : undefined,
   navigate: ()=> location.assign(HOME_ROOM),
   openDialog: ()=> openLeaveDialog(),
-  beforeRequest: ()=>{ if(progressSaver.unsaved()) saveProgress(); }, // one more try before asking
+  beforeRequest: ()=>{ if(SYNC.unsaved()){ SYNC.retry(); saveProgress(); } }, // one more try before asking
   // While a departure waits for awards, the game's controls are off so no new work starts.
   setBusy: (busy)=>{ document.querySelector(".wrap").inert=busy; },
 });
@@ -1269,7 +1313,7 @@ function returnToHomeRoom(){ leaveGuard.request(); }
 function openLeaveDialog(){
   const lines=[];
   if(wordHalfBuilt()) lines.push("Your word is not finished. Finish it to keep it.");
-  if(progressSaver.unsaved()) lines.push("Your progress could not be saved on this device. If you leave now, it will be lost.");
+  if(SYNC.unsaved()) lines.push("Your progress could not be saved on this device. If you leave now, it will be lost.");
   const msg=$("leave-msg");
   msg.textContent="";
   lines.forEach(t=>{ const p=document.createElement("p"); p.textContent=t; msg.appendChild(p); });
