@@ -383,7 +383,7 @@ test('createPublisher never calls kit.save while an earlier call is unsettled; r
   for (let n = 1; n <= 6; n++) {
     done.push(pub.request(n));
     assert.ok(set.size <= 1, 'only the run is tracked');
-    await new Promise((r) => setTimeout(r, 1));
+    await Promise.resolve(); // rapid: within one save's debounce, whatever the machine load (a 1 ms timer was flaky)
   }
   await Promise.all(done);
   await idle(set);
