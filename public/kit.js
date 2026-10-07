@@ -309,19 +309,6 @@ export function syncSummary(s, storyCount) {
 }
 
 /**
- * Field-wise max of two progress records (both are cross-device high-water marks, not
- * sums). Non-numeric values count as 0; stories are capped at `storyCount`.
- */
-export function mergeProgress(local, server, storyCount = Infinity) {
-  const l = local || {};
-  const r = server || {};
-  return {
-    storiesUnlocked: Math.min(storyCount, Math.max(count(l.storiesUnlocked), count(r.storiesUnlocked))),
-    correctTotal: Math.max(count(l.correctTotal), count(r.correctTotal)),
-  };
-}
-
-/**
  * One serialized publisher (never calls `publish` while an earlier call is unsettled, so
  * the real kit's debounce, which cancels the earlier timer without settling its promise,
  * never strands one): `request(snapshot)` keeps the newest snapshot and starts a run if
@@ -373,12 +360,11 @@ export function isVersionedKit(kit) {
 }
 
 /**
- * The game's progress on the server (launcher tile and cross-device sync). With a versioned
- * kit, the synced state is combined (see versionedProgressSync); with an older kit, today's
- * max-merge of the totals (maxMergeProgressSync). Returns { start, publish, refresh, unsaved }.
+ * The game's progress on the server (launcher tile and cross-device sync); see
+ * syncedProgressSync. Returns { start, publish, refresh, unsaved }.
  */
 export function progressSync(kit, hook, opts = {}) {
-  return isVersionedKit(kit) ? versionedProgressSync(kit, hook, opts) : maxMergeProgressSync(kit, hook, opts);
+  return syncedProgressSync(kit, hook, opts, isVersionedKit(kit));
 }
 
 /**
@@ -392,8 +378,14 @@ export function progressSync(kit, hook, opts = {}) {
  * `hook.acknowledged(ack)` (it cleans up other sessions' entries), and clears the unsaved
  * status only when it contains the current state (CDS3-014). Safe mode (`kit.syncBroken`):
  * the notice once, and no more retries; the game keeps counting locally.
+ *
+ * With a kit that is not versioned (no refresh/deviceId), the same synced state is loaded
+ * and merged with mergeSync and saved as itself, never as a total derived from it (Codex
+ * WF-CDS3-001), plus `rev` = its total for the old `save_progress` revision guard (mergeSync
+ * ignores it). Such a kit replays its own unsent copy at the next start, so there is no
+ * retry, no refresh and no acknowledgement.
  */
-function versionedProgressSync(kit, hook, {
+function syncedProgressSync(kit, hook, {
   cookie = () => document.cookie,
   onMismatch = () => {},
   isRestarting = () => false,
@@ -402,7 +394,7 @@ function versionedProgressSync(kit, hook, {
   setInterval: setIntervalFn = (fn, ms) => setInterval(fn, ms),
   clearInterval: clearIntervalFn = (id) => clearInterval(id),
   retryMs = RETRY_MS,
-} = {}) {
+} = {}, versioned = true) {
   let open = false;
   let needsServer = false;
   let announced = false;
@@ -433,6 +425,7 @@ function versionedProgressSync(kit, hook, {
     return true;
   }
   function armRetry() {
+    if (!versioned) return undefined;
     if (!needsServer) return stopTimer();
     if (checkBroken() || timer !== null) return;
     timer = setIntervalFn(retry, retryMs);
@@ -457,7 +450,8 @@ function versionedProgressSync(kit, hook, {
     }
     try {
       const sent = hook.getState();
-      const result = await kit.save(sent, syncSummary(sent, hook.storyCount));
+      const body = versioned ? sent : { ...syncState(sent), rev: syncTotal(sent) };
+      const result = await kit.save(body, syncSummary(sent, hook.storyCount));
       if (result && result.merged !== undefined) adopt(result.merged);
       if (result && result.stored === 'server') {
         const ack = result.merged !== undefined ? mergeSync(sent, result.merged) : syncState(sent);
@@ -479,7 +473,7 @@ function versionedProgressSync(kit, hook, {
         onMismatch();
         return;
       }
-      if (win && typeof win.addEventListener === 'function') win.addEventListener('online', retry);
+      if (versioned && win && typeof win.addEventListener === 'function') win.addEventListener('online', retry);
       try {
         adopt(await kit.load());
       } catch {
@@ -501,7 +495,7 @@ function versionedProgressSync(kit, hook, {
     },
     /** On return to the page: pick up the other device's work, unless a publish is in flight. */
     async refresh() {
-      if (!open || publisher.busy() || isRestarting()) return;
+      if (!versioned || !open || publisher.busy() || isRestarting()) return;
       let r = null;
       try {
         r = await kit.refresh(hook.getState());
@@ -511,57 +505,6 @@ function versionedProgressSync(kit, hook, {
       checkBroken();
       if (r && r.changed && r.state !== undefined) adopt(r.state);
     },
-    unsaved: () => typeof hook.unsaved === 'function' && !!hook.unsaved(),
-  };
-}
-
-/**
- * The server copy of the game's progress, for the launcher tile and a cross-device
- * max-merge, with a kit that is not versioned (kept as it was before cross-device sync).
- * `hook` is the game's `window.__wfProgress` ({ learner, storyCount, get, set }).
- * `start()` (inside the tracked start-up): the first `kit.load()`, a max-merge into the
- * game's in-memory counts (which already include answers made while the kit started),
- * stored through `hook.set`, then one publish, so existing progress reaches the tile with
- * no play. `publish(snapshot)` (the game's saveProgress) goes to the publisher once that
- * start-up publish has begun; before it, the start-up reads the game's counts itself.
- * Saves carry `rev = correctTotal` (storiesUnlocked follows from it), so a device with
- * fewer answers never overwrites a higher server copy. Refused under an account switch,
- * like `award`.
- */
-function maxMergeProgressSync(kit, hook, { cookie = () => document.cookie, onMismatch = () => {}, isRestarting = () => false, track: trackRun = trackPending } = {}) {
-  let open = false;
-  const publisher = createPublisher(async (snapshot) => {
-    if (isRestarting()) return;
-    if (!sameAccount(kit, cookie())) {
-      onMismatch();
-      return;
-    }
-    const p = mergeProgress(snapshot, null, hook.storyCount);
-    await kit.save({ rev: p.correctTotal, storiesUnlocked: p.storiesUnlocked, correctTotal: p.correctTotal }, progressSummary(p, hook.storyCount));
-  }, { track: trackRun });
-  return {
-    async start() {
-      // The page's learner (read from the cookie at load) must be the kit's learner.
-      if (!kit.mock && hook.learner !== kit.user.id) {
-        onMismatch();
-        return;
-      }
-      let server = {};
-      try {
-        server = await kit.load();
-      } catch {
-        // publish the in-memory counts only
-      }
-      const merged = mergeProgress(hook.get(), server, hook.storyCount);
-      hook.set(merged);
-      open = true;
-      if (merged.correctTotal > 0 || merged.storiesUnlocked > 0) await publisher.request(hook.get());
-    },
-    publish(snapshot) {
-      if (open) publisher.request(snapshot);
-    },
-    /** Nothing to pick up without a versioned kit. */
-    async refresh() {},
     unsaved: () => typeof hook.unsaved === 'function' && !!hook.unsaved(),
   };
 }

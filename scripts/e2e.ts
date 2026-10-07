@@ -503,13 +503,19 @@ async function gameInDevelopmentMode() {
     expectEq(forged[0].detail.word, expectedWord, "word_forged names the word");
     log(`dev: word_forged for "${expectedWord}"`);
     await lastSaveIs(page, "4 words forged · 1 of 18 stories");
-    expectEq(
-      await page.evaluate(() => localStorage.getItem("wordforge:progress:dev")),
-      JSON.stringify({ storiesUnlocked: 1, correctTotal: 4 }),
-      "progress is kept under the learner's key",
-    );
-    expectEq(await page.evaluate(() => localStorage.getItem("wordforge:progress")), null, "nothing under the legacy key");
-    log('dev: tile save "4 words forged · 1 of 18 stories"; local progress under wordforge:progress:dev');
+    const kept = await page.evaluate(() => {
+      const entries: Record<string, unknown> = {};
+      for (const k of Object.keys(localStorage)) if (k.startsWith("wordforge:")) entries[k] = JSON.parse(localStorage.getItem(k)!);
+      return entries;
+    });
+    const sessionKeys = Object.keys(kept).filter((k) => /^wordforge:sync:dev:(?!legacy$|known$)[^:]+$/.test(k));
+    expectEq(sessionKeys.length, 1, `one session entry (${Object.keys(kept).join(", ")})`);
+    expectEq(JSON.stringify(Object.values((kept[sessionKeys[0]] as SyncedState).correct)), "[4]", "the session entry holds only its own bucket, 4 answers");
+    expectEq(syncTotal(kept["wordforge:sync:dev:known"]), 4, "the shared known entry holds the merged state");
+    expectEq(JSON.stringify(kept["wordforge:sync:dev:legacy"]), JSON.stringify({ v: 2, correct: {} }), "the legacy import is marked done");
+    expectEq(kept["wordforge:progress:dev"], undefined, "the old aggregate record is frozen (never written)");
+    expectEq(kept["wordforge:progress"], undefined, "nothing under the legacy key");
+    log(`dev: tile save "4 words forged · 1 of 18 stories"; local progress in this session's own entry (wordforge:sync:dev:<session>)`);
 
     const seduce = await page.evaluate(() => WORDS.find((w) => w[0] === "seduce"));
     expectEq(seduce?.[4], "lead apart", "seduce literal sense");

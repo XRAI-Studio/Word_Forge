@@ -177,7 +177,7 @@ test('no learner id: nothing is read or written (memory only); unreadable storag
   assert.deepEqual(loadLearnerProgress(() => { throw new Error('SecurityError'); }, 'u1', 18), { storiesUnlocked: 0, correctTotal: 0 });
 });
 
-// ---- cross-device sync, Plan 3: one storage entry per page session (CDS3-001/009/012/013/015) ----
+// ---- cross-device sync, Plan 3: storage entries per learner (CDS3-001/009/012/013, WF-CDS3-002/003) ----
 
 const S = globalThis.WF_PROGRESS;
 
@@ -213,26 +213,36 @@ test('the sync algebra in progress-store.js agrees with kit.js on random states'
   }
 });
 
-test('loadSync writes the one-time legacy baseline when the learner has no entry, even at 0', () => {
+test('loadSync writes the legacy baseline entry when it is missing, even at 0, and merges it in', () => {
   const store = syncStorage();
   assert.deepEqual(S.loadSync(() => store, 'u1', 7), { v: 2, correct: { legacy: 7 } });
   assert.deepEqual(entry(store, 'wordforge:sync:u1:legacy'), { v: 2, correct: { legacy: 7 } });
   const empty = syncStorage();
   assert.deepEqual(S.loadSync(() => empty, 'u1', 0), { v: 2, correct: {} });
-  assert.equal(empty.data.has('wordforge:sync:u1:legacy'), true, 'the import is marked done');
-  assert.equal(S.syncTotal(S.loadSync(() => empty, 'u1', 9)), 0, 'a later aggregate is never imported');
+  assert.deepEqual(entry(empty, 'wordforge:sync:u1:legacy'), { v: 2, correct: {} }, 'the import is marked done');
 });
 
-test('loadSync merges every session entry of this learner only; unreadable entries are skipped', () => {
+test('the legacy entry is the max of its value and the claimed aggregate: re-importing never counts twice (WF-CDS3-003)', () => {
+  const store = syncStorage();
+  for (let i = 0; i < 3; i++) assert.equal(S.syncTotal(S.loadSync(() => store, 'u1', 9)), 9, `load ${i + 1}`);
+  assert.equal(S.syncTotal(S.loadSync(() => store, 'u1', 4)), 9, 'a smaller aggregate never lowers it');
+  assert.deepEqual(entry(store, 'wordforge:sync:u1:legacy'), { v: 2, correct: { legacy: 9 } });
+  // The old record only grows when the unscoped legacy record is claimed into it (a max).
+  assert.equal(S.syncTotal(S.loadSync(() => store, 'u1', 11)), 11);
+  assert.deepEqual(entry(store, 'wordforge:sync:u1:legacy'), { v: 2, correct: { legacy: 11 } });
+});
+
+test('loadSync merges the legacy, known and every session entry of this learner only; unreadable entries are skipped', () => {
   const store = syncStorage({
     'wordforge:sync:u1:legacy': JSON.stringify({ v: 2, correct: { legacy: 4 } }),
-    'wordforge:sync:u1:aaa': JSON.stringify({ v: 2, correct: { legacy: 4, 's.aaa': 2 } }),
-    'wordforge:sync:u1:bbb': JSON.stringify({ v: 2, correct: { legacy: 4, 's.bbb': 3, 's.aaa': 1 } }),
+    'wordforge:sync:u1:known': JSON.stringify({ v: 2, correct: { legacy: 4, 's.aaa': 1, 's.phone': 6 } }),
+    'wordforge:sync:u1:aaa': JSON.stringify({ v: 2, correct: { 's.aaa': 2 } }),
+    'wordforge:sync:u1:bbb': JSON.stringify({ v: 2, correct: { 's.bbb': 3 } }),
     'wordforge:sync:u1:ccc': '{not json',
     'wordforge:sync:u2:zzz': JSON.stringify({ v: 2, correct: { 's.zzz': 50 } }),
-    'wordforge:progress:u1': JSON.stringify({ storiesUnlocked: 9, correctTotal: 99 }),
+    'wordforge:progress:u1': JSON.stringify({ storiesUnlocked: 1, correctTotal: 4 }),
   });
-  assert.deepEqual(S.loadSync(() => store, 'u1', 99), { v: 2, correct: { legacy: 4, 's.aaa': 2, 's.bbb': 3 } });
+  assert.deepEqual(S.loadSync(() => store, 'u1', 4), { v: 2, correct: { legacy: 4, 's.aaa': 2, 's.bbb': 3, 's.phone': 6 } });
   assert.deepEqual(S.loadSync(() => store, 'u2', 0), { v: 2, correct: { 's.zzz': 50 } });
 });
 
@@ -243,10 +253,11 @@ test('loadSync with no learner reads and writes nothing; unreadable storage star
   assert.deepEqual(S.loadSync(() => { throw new Error('SecurityError'); }, 'u1', 3), { v: 2, correct: { legacy: 3 } });
 });
 
-test("saveSync writes only this session's key and reports a failed write", () => {
+test("saveSync writes only this session's key, holding only this session's bucket, and reports a failed write", () => {
   const store = syncStorage();
-  assert.equal(S.saveSync(() => store, 'u1', 'abc', { v: 2, correct: { 's.abc': 1 } }), true);
+  assert.equal(S.saveSync(() => store, 'u1', 'abc', { v: 2, correct: { legacy: 9, 's.abc': 1, 's.phone': 4 } }), true);
   assert.deepEqual([...store.data.keys()], ['wordforge:sync:u1:abc']);
+  assert.deepEqual(entry(store, 'wordforge:sync:u1:abc'), { v: 2, correct: { 's.abc': 1 } });
   store.failKey = () => true;
   assert.equal(S.saveSync(() => store, 'u1', 'abc', { v: 2, correct: { 's.abc': 2 } }), false);
   assert.deepEqual(entry(store, 'wordforge:sync:u1:abc'), { v: 2, correct: { 's.abc': 1 } });
@@ -260,18 +271,18 @@ test('two tabs closed before the kit starts: both answers survive a reopen (sepa
   const base = S.loadSync(() => store, 'u1', 10);
   assert.ok(S.saveSync(() => store, 'u1', 'A', S.mergeSync(base, { v: 2, correct: { 's.A': 1 } })));
   assert.ok(S.saveSync(() => store, 'u1', 'B', S.mergeSync(base, { v: 2, correct: { 's.B': 1 } })));
-  assert.equal(S.syncTotal(S.loadSync(() => store, 'u1', 12)), S.syncTotal(base) + 2, 'a later, larger aggregate is ignored');
+  assert.equal(S.syncTotal(S.loadSync(() => store, 'u1', 10)), S.syncTotal(base) + 2);
 });
 
-test('the legacy aggregate is imported once; repeated reloads never grow the total', () => {
+test('repeated reloads with the (frozen) aggregate never grow the total', () => {
   const store = syncStorage();
   let st = S.loadSync(() => store, 'u1', 10);
   st = S.mergeSync(st, { v: 2, correct: { 's.A': 2 } });
   S.saveSync(() => store, 'u1', 'A', st);
-  for (let i = 0; i < 3; i++) assert.equal(S.syncTotal(S.loadSync(() => store, 'u1', 12 + i)), 12);
+  for (let i = 0; i < 3; i++) assert.equal(S.syncTotal(S.loadSync(() => store, 'u1', 10)), 12);
 });
 
-test('a session: addCorrect counts in its own immutable bucket and writes its entry synchronously', () => {
+test('a session: addCorrect counts in its own immutable bucket, writes its entry synchronously, and refreshes :known', () => {
   const store = syncStorage();
   const a = S.createSyncSession({ getStorage: () => store, learner: 'u1', session: 'k3', legacyTotal: 5 });
   assert.equal(a.bucket, 's.k3');
@@ -279,21 +290,24 @@ test('a session: addCorrect counts in its own immutable bucket and writes its en
   assert.equal(store.data.has('wordforge:sync:u1:k3'), false, 'nothing written before the first answer');
   a.addCorrect();
   a.addCorrect();
-  assert.deepEqual(entry(store, 'wordforge:sync:u1:k3'), { v: 2, correct: { legacy: 5, 's.k3': 2 } });
+  assert.deepEqual(entry(store, 'wordforge:sync:u1:k3'), { v: 2, correct: { 's.k3': 2 } });
+  assert.deepEqual(entry(store, 'wordforge:sync:u1:known'), { v: 2, correct: { legacy: 5, 's.k3': 2 } });
   assert.equal(a.unsaved(), false);
   a.setState({ v: 2, correct: { 's.phone': 4, 's.k3': 1 } });
   assert.deepEqual(a.getState(), { v: 2, correct: { legacy: 5, 's.k3': 2, 's.phone': 4 } }, 'adopting only ever merges');
-  assert.deepEqual(entry(store, 'wordforge:sync:u1:k3'), a.getState(), 'and is written through');
+  assert.deepEqual(entry(store, 'wordforge:sync:u1:k3'), { v: 2, correct: { 's.k3': 2 } }, 'the session entry keeps its own bucket only');
+  assert.deepEqual(entry(store, 'wordforge:sync:u1:known'), a.getState(), 'the adopted work is kept in :known');
+  assert.equal(S.syncTotal(S.loadSync(() => store, 'u1', 5)), 11, 'an offline reload shows it all');
 });
 
-test('addCorrect marks progress unsaved when the session entry cannot be written, even though the aggregate write succeeds (CDS3-012)', () => {
+test('addCorrect marks progress unsaved when the session entry cannot be written, even though other writes succeed (CDS3-012)', () => {
   const store = syncStorage();
-  store.failKey = (k) => k.startsWith('wordforge:sync:u1:k3');
+  store.failKey = (k) => k === 'wordforge:sync:u1:k3';
   const aggregate = createProgressSaver(() => store, progressKey('u1'));
   const a = S.createSyncSession({ getStorage: () => store, learner: 'u1', session: 'k3', legacyTotal: 0 });
   a.addCorrect();
-  assert.equal(aggregate.save({ storiesUnlocked: 0, correctTotal: S.syncTotal(a.getState()) }), true, 'the aggregate is written');
-  assert.equal(aggregate.unsaved(), false);
+  assert.equal(aggregate.save({ storiesUnlocked: 0, correctTotal: 1 }), true, 'another key can be written');
+  assert.deepEqual(entry(store, 'wordforge:sync:u1:known'), { v: 2, correct: { 's.k3': 1 } }, 'the shared :known entry was written');
   assert.equal(a.unsaved(), true, 'the session entry was not, so progress is unsaved');
   assert.equal(a.retry(), false);
   assert.equal(a.unsaved(), true);
@@ -303,72 +317,74 @@ test('addCorrect marks progress unsaved when the session entry cannot be written
   assert.deepEqual(entry(store, 'wordforge:sync:u1:k3'), { v: 2, correct: { 's.k3': 1 } });
 });
 
-test('cleanup with identical local and server state and no answers first writes its own entry', () => {
-  const store = syncStorage({ 'wordforge:sync:u1:legacy': JSON.stringify({ v: 2, correct: { legacy: 3 } }) });
-  const a = S.createSyncSession({ getStorage: () => store, learner: 'u1', session: 'm', legacyTotal: 0 });
-  const r = a.acknowledged({ v: 2, correct: { legacy: 3 } });
-  assert.equal(r.written, true);
-  assert.deepEqual(entry(store, 'wordforge:sync:u1:m'), { v: 2, correct: { legacy: 3 } });
-  assert.deepEqual(r.removed, []);
-  assert.equal(store.data.has('wordforge:sync:u1:legacy'), true, 'the legacy baseline is never removed');
-});
-
-test('cleanup removes a lower-sorted session entry only once its own entry holds it and the server state contains it', () => {
+test('acknowledged merges the server copy in and refreshes :known; it never removes or rewrites another entry', () => {
   const store = syncStorage({
     'wordforge:sync:u1:legacy': JSON.stringify({ v: 2, correct: { legacy: 3 } }),
-    'wordforge:sync:u1:a1': JSON.stringify({ v: 2, correct: { legacy: 3, 's.a1': 2 } }),
-    'wordforge:sync:u1:a2': JSON.stringify({ v: 2, correct: { legacy: 3, 's.a2': 5 } }),
-    'wordforge:sync:u1:z9': JSON.stringify({ v: 2, correct: { legacy: 3, 's.z9': 1 } }),
+    'wordforge:sync:u1:a1': JSON.stringify({ v: 2, correct: { 's.a1': 2 } }),
   });
   const m = S.createSyncSession({ getStorage: () => store, learner: 'u1', session: 'm', legacyTotal: 0 });
-  assert.equal(S.syncTotal(m.getState()), 11);
-  // The server acknowledged a state that holds a1 and z9 but an older count of a2.
-  const ack = { v: 2, correct: { legacy: 3, 's.a1': 2, 's.a2': 4, 's.z9': 1 } };
-  const r = m.acknowledged(ack);
-  assert.equal(r.written, true);
-  assert.deepEqual(r.removed, ['wordforge:sync:u1:a1']);
-  assert.equal(store.data.has('wordforge:sync:u1:a2'), true, 'not contained in the acknowledged state');
-  assert.equal(store.data.has('wordforge:sync:u1:z9'), true, 'sorts higher than this session');
-  assert.equal(S.syncTotal(S.loadSync(() => store, 'u1', 0)), 11, 'an offline load still shows everything');
+  const before = new Map(store.data);
+  m.acknowledged({ v: 2, correct: { legacy: 3, 's.a1': 2, 's.phone': 1 } });
+  assert.deepEqual(m.getState(), { v: 2, correct: { legacy: 3, 's.a1': 2, 's.phone': 1 } });
+  assert.deepEqual(entry(store, 'wordforge:sync:u1:known'), m.getState());
+  for (const [k, v] of before) assert.equal(store.data.get(k), v, `${k} untouched`);
+  assert.equal(store.data.has('wordforge:sync:u1:m'), false, 'no own entry without an answer');
 });
 
-test("cleanup keeps another session's entry when this session's own write fails; an offline reload shows the same total", () => {
-  const store = syncStorage({
-    'wordforge:sync:u1:legacy': JSON.stringify({ v: 2, correct: { legacy: 3 } }),
-    'wordforge:sync:u1:a1': JSON.stringify({ v: 2, correct: { legacy: 3, 's.a1': 2 } }),
-  });
-  const m = S.createSyncSession({ getStorage: () => store, learner: 'u1', session: 'm', legacyTotal: 0 });
-  store.failKey = (k) => k === 'wordforge:sync:u1:m';
-  const r = m.acknowledged({ v: 2, correct: { legacy: 3, 's.a1': 2 } });
-  assert.equal(r.written, false);
-  assert.deepEqual(r.removed, []);
-  assert.equal(store.data.has('wordforge:sync:u1:a1'), true, 'nothing removed');
-  assert.equal(S.syncTotal(S.loadSync(() => store, 'u1', 0)), 5);
+test('a lost race on :known costs nothing permanent: session entries still hold every answer', () => {
+  const store = syncStorage();
+  const a = S.createSyncSession({ getStorage: () => store, learner: 'u1', session: 'a', legacyTotal: 1 });
+  const b = S.createSyncSession({ getStorage: () => store, learner: 'u1', session: 'b', legacyTotal: 1 });
+  a.addCorrect();
+  a.addCorrect();
+  b.addCorrect(); // b overwrites :known without a's answers
+  assert.deepEqual(entry(store, 'wordforge:sync:u1:known'), { v: 2, correct: { legacy: 1, 's.b': 1 } });
+  assert.equal(S.syncTotal(S.loadSync(() => store, 'u1', 1)), 4);
 });
 
-test('cleanup keeps an entry when its own entry does not read back holding it', () => {
-  const store = syncStorage({ 'wordforge:sync:u1:a1': JSON.stringify({ v: 2, correct: { 's.a1': 2 } }) });
-  const m = S.createSyncSession({ getStorage: () => store, learner: 'u1', session: 'm', legacyTotal: 0 });
-  const real = store.setItem.bind(store);
-  store.setItem = (k, v) => real(k, k.endsWith(':m') ? JSON.stringify({ v: 2, correct: {} }) : v); // a write that silently loses data
-  const r = m.acknowledged({ v: 2, correct: { 's.a1': 2 } });
-  assert.deepEqual(r.removed, []);
-  assert.equal(store.data.has('wordforge:sync:u1:a1'), true);
-});
+// ---- Codex WF-CDS3-002 / WF-CDS3-003 regressions ----
 
-test('two tabs both verify their own entries before either deletes; then both close: an offline load still shows S', () => {
+test('WF-CDS3-002: new work in session A while session B does everything it can; both close: A\'s answers survive a reload', () => {
   const store = syncStorage({ 'wordforge:sync:u1:legacy': JSON.stringify({ v: 2, correct: { legacy: 1 } }) });
+  const aKey = 'wordforge:sync:u1:a';
+  let inB = false;
+  let fired = false;
+  let reads = 0;
+  // A writes right after B's second read of A's entry (B's "unchanged on re-read" check)
+  // and before B's next step: the window Codex found between the re-read and a removal.
+  const getItem = store.getItem.bind(store);
+  store.getItem = (k) => {
+    const v = getItem(k);
+    if (inB && k === aKey && !fired && ++reads === 2) { fired = true; inB = false; a.addCorrect(); inB = true; }
+    return v;
+  };
   const a = S.createSyncSession({ getStorage: () => store, learner: 'u1', session: 'a', legacyTotal: 0 });
   const b = S.createSyncSession({ getStorage: () => store, learner: 'u1', session: 'b', legacyTotal: 0 });
   a.addCorrect();
+  const seen = a.getState();
+  inB = true;
+  b.setState(seen);
   b.addCorrect();
-  const s = { v: 2, correct: { legacy: 1, 's.a': 1, 's.b': 1 } };
-  a.setState(s);
-  b.setState(s);
-  // Both write and verify their own entries first (acknowledged writes before it removes), then each cleans up.
-  const ra = a.acknowledged(s);
-  const rb = b.acknowledged(s);
-  assert.deepEqual(ra.removed, [], 'a never removes b (b sorts higher)');
-  assert.deepEqual(rb.removed, ['wordforge:sync:u1:a']);
-  assert.deepEqual(S.loadSync(() => store, 'u1', 0), s, "the highest session's entry survives");
+  b.acknowledged(S.mergeSync(seen, b.getState()));
+  b.retry();
+  b.acknowledged(S.mergeSync(seen, b.getState()));
+  inB = false;
+  if (!fired) a.addCorrect(); // B never read A's entry: A's new work happens now instead
+  const total = S.syncTotal(S.loadSync(() => store, 'u1', 0));
+  assert.equal(total, 1 + 2 + 1, 'legacy 1, A\'s 2 answers, B\'s 1 answer');
+});
+
+test('WF-CDS3-003: a failed claim, then a recovered session write, then a reload with the claim succeeding: total 10, and it stays 10', () => {
+  const store = syncStorage({ [LEGACY_KEY]: JSON.stringify({ storiesUnlocked: 3, correctTotal: 9 }) });
+  store.failKey = () => true; // the claim (and the :legacy entry) cannot be written
+  const firstLegacy = loadLearnerProgress(() => store, 'u1', 18).correctTotal;
+  assert.equal(firstLegacy, 0, 'nothing imported without a durable claim');
+  const s1 = S.createSyncSession({ getStorage: () => store, learner: 'u1', session: 's1', legacyTotal: firstLegacy });
+  store.failKey = () => false; // storage recovers
+  s1.addCorrect();
+  assert.equal(s1.unsaved(), false, 'the session entry was written');
+  for (let i = 0; i < 3; i++) {
+    const legacy = loadLearnerProgress(() => store, 'u1', 18).correctTotal;
+    assert.equal(S.syncTotal(S.loadSync(() => store, 'u1', legacy)), 10, `reload ${i + 1}`);
+  }
 });

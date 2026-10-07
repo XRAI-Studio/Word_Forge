@@ -279,10 +279,11 @@ function showBanner(text, action, label = 'Reload', testid = 'reload-kit') {
   btn.addEventListener('click', action);
   banner.appendChild(btn);
 }
-// Launcher tile: the game's saveProgress hands each snapshot here; it reaches the portal
-// once the start-up publish has begun (until then the start-up reads the game's counts).
+// Launcher tile and cross-device sync: the game's saveProgress calls this after each change;
+// the synced state (read from window.__wfProgress) reaches the portal once the start-up
+// publish has begun (until then the start-up reads it itself).
 let tileSync = null;
-window.__wfPublish = (snapshot) => { tileSync?.publish(snapshot); };
+window.__wfPublish = () => { tileSync?.publish(); };
 // Start-up is one tracked operation (R007): kit init, the first kit.load(), the merge into
 // the game's progress and the first publish, so the Home Room button waits for all of it
 // within its bounded deadline.
@@ -1112,16 +1113,16 @@ let storiesUnlocked=0, correctTotal=0;
    bucket and the stories follow it (one per three answers). A failed write
    of that entry marks progress unsaved (the Home Room button warns); it
    clears when a later write succeeds or the server holds this state. The
-   old aggregate record { storiesUnlocked, correctTotal } is still written
-   for pages from before this change, and read once, as the legacy baseline.
+   old aggregate record { storiesUnlocked, correctTotal } is frozen: this
+   page never writes it (so it never carries v2 answers); its claimed total
+   is imported as the legacy bucket (Codex WF-CDS3-003).
    Each save also goes to the portal (window.__wfPublish, set by the kit
    module), which merges in the other device's work through
    window.__wfProgress below. */
 const LEARNER=WF_PROGRESS.learnerId(document.cookie, location.hostname);
-const PROGRESS_KEY=LEARNER ? WF_PROGRESS.progressKey(LEARNER) : null;
-const progressSaver=WF_PROGRESS.createProgressSaver(()=>localStorage, PROGRESS_KEY);
-/* This page session's id, chosen at load before any answer; it never changes. */
-const SESSION=(function(){ let s=""; while(!s || s==="legacy") s=Math.random().toString(36).slice(2,10); return s; })();
+/* This page session's id, chosen at load before any answer; it never changes
+   (never one of the shared entry names, "legacy" and "known"). */
+const SESSION=(function(){ let s=""; while(!s || s==="legacy" || s==="known") s=Math.random().toString(36).slice(2,10); return s; })();
 let SYNC=null; // this session's synced progress, from loadProgress()
 function applySync(){
   correctTotal=WF_PROGRESS.syncTotal(SYNC.getState());
@@ -1133,10 +1134,8 @@ function showSync(){
   if(mode==="stories") renderStories();
 }
 function saveProgress(publish=true){
-  const snapshot={storiesUnlocked, correctTotal};
-  progressSaver.save(snapshot);
   syncLeaveGuard();
-  if(publish) window.__wfPublish?.(snapshot);
+  if(publish) window.__wfPublish?.();
   return !SYNC.unsaved();
 }
 function loadProgress(){
@@ -1146,23 +1145,10 @@ function loadProgress(){
 }
 /* Kit hook (module bootstrap, kit.js progressSync). getState/setState: the
    synced state; setState only ever merges in (another device's work) and is
-   not published again. addCorrect: one answer in this session's bucket.
-   get/set: the totals, for a kit without cross-device sync (set raises the
-   legacy bucket so the total reaches the server copy's). */
+   not published again. addCorrect: one answer in this session's bucket. */
 window.__wfProgress={
   learner: LEARNER,
   storyCount: STORIES.length,
-  get: ()=>({storiesUnlocked, correctTotal}),
-  set: (p)=>{
-    const extra=(p && typeof p.correctTotal==="number" ? Math.floor(p.correctTotal) : 0)-correctTotal;
-    if(extra>0){
-      const c=SYNC.getState().correct;
-      const legacy=Object.prototype.hasOwnProperty.call(c,"legacy") ? c.legacy : 0;
-      SYNC.setState({v:2, correct:Object.fromEntries([["legacy", legacy+extra]])});
-    }
-    showSync();
-    saveProgress();
-  },
   getState: ()=>SYNC.getState(),
   setState: (next)=>{ SYNC.setState(next); showSync(); saveProgress(false); },
   addCorrect: ()=>{ const st=SYNC.addCorrect(); applySync(); return st; },
