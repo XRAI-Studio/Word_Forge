@@ -165,6 +165,10 @@ declare const forgePicks: { prefix: string | null; stem: string | null; suffix: 
 declare const WORDS: Array<Array<string | null>>;
 declare const PRAISE: string[];
 declare const fcDeck: string[][];
+declare const PREFIXES: string[][];
+declare const STEMS: string[][];
+declare const SUFFIXES: string[][];
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- assigned in page.evaluate (the game's own binding)
 declare let fcIdx: number;
 
 async function awards(page: Page): Promise<Award[]> {
@@ -373,7 +377,25 @@ async function phonePass(browser: Awaited<ReturnType<typeof chromium.launch>>, b
         return { bad, n: WORDS.length };
       });
       expectEq(forgeBad.bad.length, 0, `${theme} forge: slots on one line for every word (failed: ${forgeBad.bad.join(", ")})`);
+      await sizes(".prompt-label", 16, null, "forge prompt");
+      await sizes(".tile small", 16, null, "forge tile meanings");
       await shot("forge");
+      // Every word part in the data as a tile (the word-part definitions are reading text):
+      // each fits its tile and the bank, at 16 px.
+      const tileBad = await page.evaluate(() => {
+        const bank = document.getElementById("bank")!;
+        const saved = bank.innerHTML;
+        const lists: Array<[string, string[][]]> = [["prefix", PREFIXES], ["stem", STEMS], ["suffix", SUFFIXES]];
+        bank.innerHTML = lists.flatMap(([t, l]) => l.map((x) => `<button class="tile tile-${t}">${x[0]}<small>${x[1]}</small></button>`)).join("");
+        const bad = [...bank.querySelectorAll<HTMLElement>(".tile")]
+          .filter((b) => b.scrollWidth > b.clientWidth || parseFloat(getComputedStyle(b.querySelector("small")!).fontSize) < 16)
+          .map((b) => b.textContent ?? "");
+        if (bank.scrollWidth > bank.clientWidth || document.documentElement.scrollWidth > window.innerWidth) bad.push("(bank overflows)");
+        const n = bank.children.length;
+        bank.innerHTML = saved;
+        return { bad, n };
+      });
+      expectEq(tileBad.bad.length, 0, `${theme} forge: every part tile fits at 16 px (failed: ${tileBad.bad.join(", ")})`);
 
       // Decode: answer choices and the big word, for every word in the data.
       await page.evaluate(() => (window as unknown as Win).setMode!("decode"));
@@ -381,6 +403,7 @@ async function phonePass(browser: Awaited<ReturnType<typeof chromium.launch>>, b
       await noOverflow("decode");
       await sizes(".choice", 16, 44, "decode");
       await sizes(".subtext", 16, null, "decode");
+      await sizes(".prompt-label", 16, null, "decode question");
       const decodeBad = await page.evaluate(() => {
         const bad: string[] = [];
         const orig = Math.random;
@@ -457,6 +480,20 @@ async function phonePass(browser: Awaited<ReturnType<typeof chromium.launch>>, b
       await sizes(".fc-back .fc-ex", 16, null, "flashcard example");
 
       // Stories.
+      // The story card's button: its focus ring sits on the card surface and must reach 3:1.
+      const ring = await page.evaluate(() => {
+        (window as unknown as { showStoryModal: (i: number, isNew: boolean) => void }).showStoryModal(0, false);
+        const btn = document.querySelector<HTMLElement>(".story-card .btn")!;
+        const out = { ring: getComputedStyle(btn).getPropertyValue("--focus").trim(), card: getComputedStyle(btn.closest(".story-card")!).backgroundColor };
+        document.querySelectorAll(".story-overlay").forEach((o) => o.remove());
+        return out;
+      });
+      const rgb = (c: string) => c.startsWith("#") ? [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16)) : (c.match(/\d+/g) ?? []).slice(0, 3).map(Number);
+      const lum = (c: number[]) => { const f = (v: number) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }; return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]); };
+      const [hiL, loL] = [lum(rgb(ring.ring)), lum(rgb(ring.card))].sort((x, y) => y - x);
+      const ringRatio = (hiL + 0.05) / (loL + 0.05);
+      expectEq(ringRatio >= 3, true, `${theme} story card focus ring ${ring.ring} on ${ring.card}: ${ringRatio.toFixed(2)} >= 3`);
+
       await page.evaluate(() => (window as unknown as Win).setMode!("stories"));
       await noOverflow("stories");
       await themeIs("after switching to Stories");
