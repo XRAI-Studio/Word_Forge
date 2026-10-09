@@ -45,3 +45,23 @@ describe("ThemeSync", () => {
     expect(container.innerHTML).toBe("");
   });
 });
+
+describe("ThemeSync when the head script never ran", () => {
+  it("starts the theme runtime itself (Next's error shell after a failed first render), once", async () => {
+    document.cookie = "ts_theme=dark; Path=/";
+    delete (window as { TSTheme?: unknown }).TSTheme;
+    const html = document.documentElement;
+    html.removeAttribute("data-theme");
+    html.removeAttribute("data-theme-pref");
+    html.style.colorScheme = "";
+    await act(async () => root.render(createElement(ThemeSync)));
+    expect([html.getAttribute("data-theme"), html.getAttribute("data-theme-pref"), html.style.colorScheme]).toEqual(["dark", "dark", "dark"]);
+    const runtime = window.TSTheme;
+    expect(runtime).toBeDefined();
+    await act(async () => root.render(createElement(ThemeSync, { key: "again" })));
+    expect(window.TSTheme).toBe(runtime);
+    document.cookie = "ts_theme=light; Path=/";
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(html.getAttribute("data-theme")).toBe("light");
+  });
+});
