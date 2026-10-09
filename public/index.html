@@ -69,6 +69,7 @@
   --shade-rgb:10,18,70;   /* navy shadows and tints */
   --scrim-rgb:10,16,60;   /* dialog backdrops */
   --hi-rgb:255,255,255;   /* white highlights on blue */
+  --hover-a:.16;          /* white overlay on a hovered tab: keeps white labels >= 4.5:1 at the light top of the page */
   --field-border:rgba(var(--hi-rgb),.55);
   --shadow:0 5px 0 rgba(var(--shade-rgb),.55);
   --pop:0 5px 0 rgba(var(--shade-rgb),.55), 0 12px 24px rgba(var(--shade-rgb),.35);
@@ -86,6 +87,7 @@
   --surface-text-muted:#CBD5E1;
   --tab-active:var(--sun);
   --tab-active-text:var(--ink);
+  --hover-a:.22;
   --focus-on-surface:var(--sun);
   --shade-rgb:2,6,23;
   --scrim-rgb:2,5,18;
@@ -128,7 +130,7 @@ nav button{
   border-radius:16px;padding:10px 20px;min-height:44px;cursor:pointer;transition:transform .12s,background .12s;
   box-shadow:0 4px 0 rgba(var(--shade-rgb),.4);
 }
-nav button:hover{transform:translateY(-2px);background:rgba(var(--hi-rgb),.22)}
+nav button:hover{transform:translateY(-2px);background:rgba(var(--hi-rgb),var(--hover-a))}
 nav button:active{transform:translateY(2px);box-shadow:0 1px 0 rgba(var(--shade-rgb),.4)}
 nav button.active{background:var(--sun);color:var(--ink);box-shadow:0 4px 0 var(--sun-hot),0 8px 18px rgba(255,201,60,.35)}
 button:focus-visible,input:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
