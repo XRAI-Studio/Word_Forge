@@ -426,6 +426,30 @@ async function phonePass(browser: Awaited<ReturnType<typeof chromium.launch>>, b
       await noOverflow("lexicon");
       await sizes(".lex-tabs button", 13, 44, "lexicon tabs");
       await sizes(".lex-item .mean", 16, null, "lexicon");
+      await sizes(".lex-item .ex", 16, null, "lexicon examples");
+      // Open a prefix family with a tap, then every family in turn: the story and its
+      // example words are reading text, and the page must not widen.
+      await page.locator(".lex-item.expandable").first().click();
+      await sizes(".family-panel .fam-story", 16, null, "family story");
+      await sizes(".family-chips span", 16, null, "family words");
+      await noOverflow("lexicon, family open");
+      await shot("lexicon-family");
+      const familyBad = await page.evaluate(() => {
+        const g = window as unknown as { toggleFamily: (p: string) => void };
+        const bad: string[] = [];
+        const prefixes = [...document.querySelectorAll<HTMLElement>(".lex-item.expandable .part")].map((e) => (e.textContent ?? "").split(" ")[0]);
+        for (const p of prefixes) {
+          g.toggleFamily(p);
+          if (!document.querySelector(".family-panel")) g.toggleFamily(p); // it was the open one
+          const panel = document.querySelector<HTMLElement>(".family-panel");
+          const chips = [...document.querySelectorAll<HTMLElement>(".family-chips span")];
+          if (!panel || chips.length === 0 || chips.some((c) => parseFloat(getComputedStyle(c).fontSize) < 16)
+            || panel.scrollWidth > panel.clientWidth || document.documentElement.scrollWidth > window.innerWidth) bad.push(p);
+        }
+        return { bad, n: prefixes.length };
+      });
+      expectEq(familyBad.n > 0, true, `${theme} lexicon: families present`);
+      expectEq(familyBad.bad.length, 0, `${theme} lexicon: every family opens at 16 px without widening the page (failed: ${familyBad.bad.join(", ")})`);
       await shot("lexicon");
 
       // Flashcards: the longest definition and literal meaning, front and back, then the
@@ -505,7 +529,7 @@ async function phonePass(browser: Awaited<ReturnType<typeof chromium.launch>>, b
       await themeIs("not-found page");
       await noOverflow("not-found page");
       await shot("not-found");
-      log(`dev: phone 375x667 ${theme}: data-theme, no sideways scroll, tabs/choices/buttons >= 44 px, reading text >= 16 px, slots on one line for ${forgeBad.n} words, flashcard faces share a grid cell; not-found page themed`);
+      log(`dev: phone 375x667 ${theme}: data-theme, no sideways scroll, tabs/choices/buttons >= 44 px, reading text >= 16 px (incl. lexicon examples and every family), slots on one line for ${forgeBad.n} words, flashcard faces share a grid cell; not-found page themed`);
     } finally {
       await context.close();
     }
