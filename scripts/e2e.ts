@@ -16,12 +16,18 @@
  *      window.__kitSaves are checked by headline text. A second page starts with a legacy
  *      unscoped progress record, holds the mock's first load open and leaves during it:
  *      the record is claimed by the learner, and the start-up's first save (existing
- *      progress, no play) still happens before the navigation (R001, R007).
+ *      progress, no play) still happens before the navigation (R001, R007). Then a phone
+ *      pass: 375 x 667 in the light and dark themes (portal cookie ts_theme) with layout,
+ *      font-size and tap-target checks on every tab and on the not-found page; screenshots
+ *      go to E2E_SHOT_DIR (default: the OS temp directory), not the repository.
  *
  *   npm run e2e            (needs `npx playwright install chromium` once)
  */
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { mkdirSync } from "node:fs";
 import net from "node:net";
+import os from "node:os";
+import path from "node:path";
 import { chromium, type Page } from "playwright";
 
 const PORTAL_LOGIN = "https://class.travelschooling.com/login?next=";
@@ -158,6 +164,8 @@ declare const current: { w: string[] };
 declare const forgePicks: { prefix: string | null; stem: string | null; suffix: string | null };
 declare const WORDS: Array<Array<string | null>>;
 declare const PRAISE: string[];
+declare const fcDeck: string[][];
+declare let fcIdx: number;
 
 async function awards(page: Page): Promise<Award[]> {
   return page.evaluate(() => (window as unknown as Win).__kitAwards ?? []);
@@ -289,6 +297,184 @@ async function homeRoomButton(page: Page) {
   log("dev: with nothing unsaved, Return to Home Room goes to the portal without a prompt");
 }
 
+/**
+ * Phone pass (class standard §6.4): 375 × 667 in both themes, the theme chosen by the
+ * portal's `ts_theme` cookie on this origin. Asserts the head script's data-theme, no
+ * sideways page scroll on every tab, reading text ≥ 16 px and primary controls ≥ 44 × 44
+ * on the named selectors (tabs, answer choices, flashcard faces), the three snap slots on
+ * one line for every word in the data, the big word inside its card for every word, and the
+ * flashcard faces sharing one grid cell that grows to fit the longest definition and literal
+ * meaning. Then the not-found page. Screenshots go to E2E_SHOT_DIR (default: the OS temp
+ * directory), never the repository.
+ */
+async function phonePass(browser: Awaited<ReturnType<typeof chromium.launch>>, base: string) {
+  const shotDir = process.env.E2E_SHOT_DIR ?? path.join(os.tmpdir(), "wordforge-e2e");
+  mkdirSync(shotDir, { recursive: true });
+  for (const theme of ["light", "dark"] as const) {
+    const context = await browser.newContext({ viewport: { width: 375, height: 667 } });
+    try {
+      await context.addCookies([{ name: "ts_theme", value: theme, url: base }]);
+      const page = await context.newPage();
+      const errors: string[] = [];
+      page.on("pageerror", (e) => errors.push(e.message));
+      const shot = (name: string) => page.screenshot({ path: path.join(shotDir, `phone-${theme}-${name}.png`), fullPage: true });
+      const themeIs = async (where: string) => {
+        const t = await page.evaluate(() => ({ theme: document.documentElement.dataset.theme, pref: document.documentElement.dataset.themePref }));
+        expectEq(t.theme, theme, `${theme} ${where}: data-theme`);
+        expectEq(t.pref, theme, `${theme} ${where}: data-theme-pref`);
+      };
+      const noOverflow = async (where: string) => {
+        const o = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, iw: window.innerWidth }));
+        expectEq(o.sw <= o.iw, true, `${theme} ${where}: page scrollWidth ${o.sw} <= ${o.iw}`);
+      };
+      /** Each element matching `sel`: computed font-size ≥ minFont, and (if given) box ≥ minBox square. */
+      const sizes = async (sel: string, minFont: number, minBox: number | null, where: string) => {
+        const els = await page.evaluate((s) => [...document.querySelectorAll(s)].filter((e) => e.getClientRects().length > 0).map((e) => {
+          const r = e.getBoundingClientRect();
+          return { text: (e.textContent ?? "").trim().slice(0, 30), fs: parseFloat(getComputedStyle(e).fontSize), w: r.width, h: r.height };
+        }), sel);
+        expectEq(els.length > 0, true, `${theme} ${where}: ${sel} present`);
+        for (const e of els) {
+          expectEq(e.fs >= minFont, true, `${theme} ${where}: ${sel} "${e.text}" font ${e.fs}px >= ${minFont}`);
+          if (minBox !== null) expectEq(e.w >= minBox && e.h >= minBox, true, `${theme} ${where}: ${sel} "${e.text}" ${e.w.toFixed(1)}x${e.h.toFixed(1)} >= ${minBox}`);
+        }
+      };
+
+      await page.goto(`${base}/`, { waitUntil: "load" });
+      await page.waitForFunction(() => typeof (window as unknown as Win).__wfAward === "function", null, { timeout: 30_000 });
+      await themeIs("game");
+      await noOverflow("forge");
+      await sizes("nav button", 16, 44, "tabs");
+      await sizes(".btn", 16, 44, "forge buttons");
+
+      // Forge: every word in the data, built in full, keeps its slots on one line.
+      const forgeBad = await page.evaluate(() => {
+        const bad: string[] = [];
+        const orig = Math.random;
+        const g = window as unknown as { renderForge: () => void; renderBank: () => void };
+        for (let i = 0; i < WORDS.length; i++) {
+          let first = true;
+          Math.random = () => { if (first) { first = false; return (i + 0.5) / WORDS.length; } return orig(); };
+          g.renderForge();
+          Math.random = orig;
+          const w = current.w;
+          forgePicks.prefix = w[1] || null;
+          forgePicks.stem = w[2];
+          forgePicks.suffix = w[3] || null;
+          g.renderBank();
+          const slots = [...document.querySelectorAll<HTMLElement>("#stick .slot")];
+          const tops = new Set(slots.map((s) => Math.round(s.getBoundingClientRect().top)));
+          const stick = document.getElementById("stick")!;
+          if (tops.size !== 1 || slots.some((s) => s.scrollWidth > s.clientWidth) || stick.scrollWidth > stick.clientWidth
+            || document.documentElement.scrollWidth > window.innerWidth) bad.push(String(w[0]));
+        }
+        forgePicks.prefix = forgePicks.stem = forgePicks.suffix = null;
+        g.renderBank();
+        return { bad, n: WORDS.length };
+      });
+      expectEq(forgeBad.bad.length, 0, `${theme} forge: slots on one line for every word (failed: ${forgeBad.bad.join(", ")})`);
+      await shot("forge");
+
+      // Decode: answer choices and the big word, for every word in the data.
+      await page.evaluate(() => (window as unknown as Win).setMode!("decode"));
+      await themeIs("after switching to Decode");
+      await noOverflow("decode");
+      await sizes(".choice", 16, 44, "decode");
+      await sizes(".subtext", 16, null, "decode");
+      const decodeBad = await page.evaluate(() => {
+        const bad: string[] = [];
+        const orig = Math.random;
+        const g = window as unknown as { renderDecode: () => void };
+        for (let i = 0; i < WORDS.length; i++) {
+          let first = true;
+          Math.random = () => { if (first) { first = false; return (i + 0.5) / WORDS.length; } return orig(); };
+          g.renderDecode();
+          Math.random = orig;
+          const big = document.querySelector<HTMLElement>(".bigword")!;
+          if (big.scrollWidth > big.clientWidth || document.documentElement.scrollWidth > window.innerWidth) bad.push(String(current.w[0]));
+        }
+        return bad;
+      });
+      expectEq(decodeBad.length, 0, `${theme} decode: the big word fits for every word (failed: ${decodeBad.join(", ")})`);
+      await shot("decode");
+
+      // Lexicon.
+      await page.evaluate(() => (window as unknown as Win).setMode!("lexicon"));
+      await noOverflow("lexicon");
+      await sizes(".lex-tabs button", 13, 44, "lexicon tabs");
+      await sizes(".lex-item .mean", 16, null, "lexicon");
+      await shot("lexicon");
+
+      // Flashcards: the longest definition and literal meaning, front and back, then the
+      // longest part meaning.
+      await page.evaluate(() => (window as unknown as Win).setMode!("cards"));
+      await themeIs("after switching to Flashcards");
+      await sizes(".lex-tabs button", 13, 44, "flashcard tabs");
+      await sizes(".fc-nav .btn", 16, 44, "flashcard buttons");
+      type Fc = { faces: Array<{ pos: string; area: string; top: number; h: number; over: number }>; inner: string; card: { w: number; h: number; right: number }; stage: number };
+      const flashcard = async (pick: string): Promise<Fc> => page.evaluate((p) => {
+        const g = window as unknown as { setFcTab: (t: string) => void; showCard: () => void; flipCard: () => void };
+        const [tab, field] = p.split(":");
+        g.setFcTab(tab);
+        const deck = fcDeck;
+        let best = 0;
+        deck.forEach((c, i) => { if (c[Number(field)].length > deck[best][Number(field)].length) best = i; });
+        fcIdx = best;
+        g.showCard();
+        const faces = [...document.querySelectorAll<HTMLElement>(".fc-face")].map((f) => {
+          const r = f.getBoundingClientRect();
+          return { pos: getComputedStyle(f).position, area: getComputedStyle(f).gridArea, top: r.top, h: r.height, over: f.scrollHeight - f.clientHeight };
+        });
+        const card = document.getElementById("fcard")!.getBoundingClientRect();
+        const stage = document.querySelector(".fc-stage")!.getBoundingClientRect().right;
+        return { faces, inner: getComputedStyle(document.querySelector(".fc-inner")!).display, card: { w: card.width, h: card.height, right: card.right }, stage };
+      }, pick);
+      const checkCard = async (fc: Fc, where: string) => {
+        expectEq(fc.inner, "grid", `${theme} ${where}: .fc-inner is a grid`);
+        expectEq(fc.faces.length, 2, `${theme} ${where}: two faces`);
+        for (const f of fc.faces) {
+          expectEq(f.pos === "absolute", false, `${theme} ${where}: faces are not absolutely positioned`);
+          expectEq(f.area.startsWith("1 / 1"), true, `${theme} ${where}: face grid-area ${f.area}`);
+          expectEq(f.over <= 0, true, `${theme} ${where}: face content fits (overflow ${f.over}px)`);
+        }
+        expectEq(Math.abs(fc.faces[0].top - fc.faces[1].top) < 1 && Math.abs(fc.faces[0].h - fc.faces[1].h) < 1, true, `${theme} ${where}: faces share one cell`);
+        expectEq(fc.card.h >= 270, true, `${theme} ${where}: flashcard height ${fc.card.h} >= 270`);
+        expectEq(fc.card.w >= 44, true, `${theme} ${where}: flashcard is a large tap target`);
+        expectEq(fc.card.right <= fc.stage + 0.5, true, `${theme} ${where}: flashcard inside its card`);
+        await noOverflow(where);
+      };
+      await checkCard(await flashcard("words:6"), "flashcard, longest definition");
+      await sizes(".fc-def", 16, null, "flashcard definition");
+      await sizes(".fc-lit", 16, null, "flashcard literal meaning");
+      await shot("flashcard-front");
+      await page.evaluate(() => (window as unknown as { flipCard: () => void }).flipCard());
+      await page.waitForTimeout(700);
+      await shot("flashcard-back");
+      await checkCard(await flashcard("words:5"), "flashcard, longest literal meaning");
+      await sizes(".fc-lit", 16, null, "flashcard literal meaning");
+      await checkCard(await flashcard("all:2"), "flashcard, longest part meaning");
+      await sizes(".fc-back .fc-mean", 16, null, "flashcard part meaning");
+      await sizes(".fc-back .fc-ex", 16, null, "flashcard example");
+
+      // Stories.
+      await page.evaluate(() => (window as unknown as Win).setMode!("stories"));
+      await noOverflow("stories");
+      await themeIs("after switching to Stories");
+      await shot("stories");
+      expectEq(errors.length, 0, `${theme} phone page errors: ${errors.join(" | ")}`);
+
+      // The shell's not-found page follows the theme too.
+      await page.goto(`${base}/README.md`, { waitUntil: "load" });
+      await themeIs("not-found page");
+      await noOverflow("not-found page");
+      await shot("not-found");
+      log(`dev: phone 375x667 ${theme}: data-theme, no sideways scroll, tabs/choices/buttons >= 44 px, reading text >= 16 px, slots on one line for ${forgeBad.n} words, flashcard faces share a grid cell; not-found page themed`);
+    } finally {
+      await context.close();
+    }
+  }
+}
+
 async function gameInDevelopmentMode() {
   const port = await freePort();
   const base = `http://localhost:${port}`;
@@ -393,6 +579,7 @@ async function gameInDevelopmentMode() {
     log("dev: repository files are 404, the game files are 200");
 
     await leaveDuringDelayedFirstLoad(browser, base);
+    await phonePass(browser, base);
   } finally {
     try {
       if (browser) await browser.close();
