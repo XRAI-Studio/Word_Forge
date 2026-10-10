@@ -21,8 +21,8 @@ describe("error pages follow the learner's theme", () => {
   });
 
   it("global-error's Try again button is a 44 px target", () => {
-    expect(html).toMatch(/button \{[^}]*min-height: 44px/);
-    expect(html).toContain(">Try again</button>");
+    expect(html).toMatch(/\.action \{[^}]*min-height: 44px/);
+    expect(html).toMatch(/<button[^>]*class="action"[^>]*>Try again<\/button>/);
   });
 
   it("global-error re-applies the theme after a client-side remount (ThemeSync)", () => {
@@ -36,5 +36,23 @@ describe("error pages follow the learner's theme", () => {
     expect(layout).not.toMatch(/@media[^{]*prefers-color-scheme/);
     expect(readFileSync("src/app/layout.tsx", "utf8")).toMatch(/<ThemeSync \/>/);
     expect(readFileSync("src/app/not-found.tsx", "utf8")).not.toContain("prefers-color-scheme");
+  });
+});
+
+describe("static production 500 page (same gap as Codex PORTAL-APPEARANCE-012)", () => {
+  it("exists as a Pages Router 500 page, so Next keeps it instead of its OS-themed built-in", () => {
+    const src = readFileSync("src/pages/500.tsx", "utf8");
+    expect(src).toContain("THEME_HEAD_SCRIPT");
+    expect(src).toContain("ERROR_PAGE_STYLE");
+    expect(src).toMatch(/<a className="action" href="">/);
+  });
+
+  it("shares the error-page styles: data-theme keyed, 16px text, 44px action, no OS media rule", async () => {
+    const { ERROR_PAGE_STYLE } = await import("@/lib/error-page-style");
+    expect(ERROR_PAGE_STYLE).toContain(':root[data-theme="dark"] body');
+    expect(ERROR_PAGE_STYLE).toMatch(/\.action \{[^}]*min-height: 44px/);
+    expect(ERROR_PAGE_STYLE).toMatch(/p \{ font-size: 1rem; \}/);
+    expect(ERROR_PAGE_STYLE).not.toMatch(/@media[^{]*prefers-color-scheme/);
+    expect(readFileSync("src/app/global-error.tsx", "utf8")).toContain("ERROR_PAGE_STYLE");
   });
 });
