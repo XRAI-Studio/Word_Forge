@@ -70,7 +70,7 @@ function pageScripts(html) {
 }
 
 // Older workers' caches as installed browsers hold them: each one's SHELL (v2 frozen at
-// 0d9b9bd, v3 at 3fb30c4, v4 at 88af2e4, v5 at c560456, v6 at 61c8183), which is also everything that
+// 0d9b9bd, v3 at 3fb30c4, v4 at 88af2e4, v5 at c560456, v6 at 61c8183, v7 at 3ed8870), which is also everything that
 // version's page fetched at run time.
 const OLD_WORKER_CACHES = {
   'word-forge-v2': [
@@ -102,6 +102,12 @@ const OLD_WORKER_CACHES = {
     './fonts/baloo2.woff2', './fonts/nunito.woff2',
     './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png',
   ],
+  'word-forge-v7': [
+    './', './index.html', './manifest.webmanifest',
+    './kit.js?v=7', './progress-store.js?v=7', './leave-guard.js?v=7', './sw-policy.js',
+    './fonts/baloo2.woff2', './fonts/nunito.woff2',
+    './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png',
+  ],
 };
 
 /** How an old worker answers a script request: caches.match (exact URL, query included), else network. */
@@ -109,7 +115,7 @@ function oldWorkerServes(cache, url) {
   return OLD_WORKER_CACHES[cache].map((p) => new URL(p, ORIGIN_ROOT).href).includes(url) ? 'old-cache' : 'network';
 }
 
-test('an old v2, v3, v4, v5 or v6 worker never pairs the new page with a script from its cache', async () => {
+test('an old v2, v3, v4, v5, v6 or v7 worker never pairs the new page with a script from its cache', async () => {
   const scripts = pageScripts(await source('index.html'));
   assert.ok(scripts.length >= 3, `found the page scripts: ${scripts.join(', ')}`);
   for (const cache of Object.keys(OLD_WORKER_CACHES)) {
@@ -131,9 +137,9 @@ test('every page script is versioned with the cache version and precached under 
   }
 });
 
-test('sw.js: the cache is bumped past v5 and every older cache is cleaned up', async () => {
+test('sw.js: the cache is bumped past v7 and every older cache is cleaned up', async () => {
   const src = await source('sw.js');
-  assert.match(src, /const CACHE = "word-forge-v7";/);
-  assert.match(src, /const OLD_CACHES = \["word-forge-v1", "word-forge-v2", "word-forge-v3", "word-forge-v4", "word-forge-v5", "word-forge-v6"\];/);
+  assert.match(src, /const CACHE = "word-forge-v8";/);
+  assert.match(src, /const OLD_CACHES = \["word-forge-v1", "word-forge-v2", "word-forge-v3", "word-forge-v4", "word-forge-v5", "word-forge-v6", "word-forge-v7"\];/);
   assert.ok(shellOf(src).includes(new URL('./sw-policy.js', ORIGIN_ROOT).href), 'the worker policy is precached');
 });
