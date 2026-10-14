@@ -16,7 +16,8 @@ const EMPTY_AWARD = { awarded_xp: 0, xp: 0, gems: 0, level: 1, streak: 0, level_
 const clone = (v) => (v === undefined ? v : JSON.parse(JSON.stringify(v)));
 
 /**
- * A kit that records awards on window.__kitAwards and saves on window.__kitSaves instead of
+ * A kit that records awards on window.__kitAwards, graded answers on window.__kitAnswers
+ * (`{ correct, ...detail }`, as `kit.answer` takes them) and saves on window.__kitSaves instead of
  * calling the portal. It keeps one stored state in memory (load returns `{}` until a save),
  * and drops a save whose rev is lower than the stored one, as `save_progress` does.
  * `win.__kitLoadGate` (e2e): a promise every load waits for, to hold the first load open.
@@ -29,6 +30,7 @@ const clone = (v) => (v === undefined ? v : JSON.parse(JSON.stringify(v)));
 export function mockKit(win, { merge } = {}) {
   const awards = (win.__kitAwards = win.__kitAwards || []);
   const saves = (win.__kitSaves = win.__kitSaves || []);
+  const answers = (win.__kitAnswers = win.__kitAnswers || []);
   let stored = null;
   const revOf = (state) => (state && typeof state.rev === 'number' ? state.rev : 0);
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -65,6 +67,9 @@ export function mockKit(win, { merge } = {}) {
     award: async (event, detail = {}) => {
       awards.push({ event, detail });
       return { ...EMPTY_AWARD };
+    },
+    answer: (correct, detail) => {
+      answers.push({ correct, ...detail });
     },
     unlock: async () => ({}),
     toast: () => undefined,
@@ -205,7 +210,71 @@ export function award(kit, event, detail, { cookie = () => document.cookie, onMi
   return true;
 }
 
-export const RESTART_TEXT = 'The signed-in account changed. Reloading…';
+// ---- answer log (portal migration 0018): every graded attempt, right or wrong ----
+
+/** The longest item/skill/given/expected the portal keeps. */
+export const ANSWER_TEXT_MAX = 200;
+export const FORGE_SKILL = 'Forge: build words from parts';
+const DECODE_PARTS = new Set(['prefix', 'stem', 'suffix']);
+
+const answerText = (v) => (typeof v === 'string' ? v.trim().slice(0, ANSWER_TEXT_MAX) : '');
+const joinParts = (parts) => (Array.isArray(parts) ? parts.map(answerText).filter(Boolean).join(' + ') : '');
+
+/**
+ * The portal's answer detail (`kit.answer`'s `{ item, skill, given, expected }`) for one
+ * graded attempt as the game describes it:
+ * - Decode `{ mode: 'decode', word, part, key, given, expected }` (the chosen and right
+ *   meanings of the highlighted part): item "convert · prefix con-", skill
+ *   "Decode: prefix meanings".
+ * - Forge `{ mode: 'forge', word, given, expected }` (`[prefix, stem, suffix]` picked and
+ *   right, null where the word has no such part): item "convert", skill FORGE_SKILL,
+ *   given/expected "con- + vert".
+ * Empty fields are left out; each kept one is at most ANSWER_TEXT_MAX characters. Never throws.
+ */
+export function answerDetail(attempt) {
+  const a = attempt && typeof attempt === 'object' ? attempt : {};
+  const word = answerText(a.word);
+  let fields = {};
+  if (a.mode === 'decode') {
+    const part = DECODE_PARTS.has(a.part) ? a.part : '';
+    const key = answerText(a.key);
+    const asked = [part, key].filter(Boolean).join(' ');
+    fields = {
+      item: word && asked ? `${word} · ${asked}` : word || asked,
+      skill: part ? `Decode: ${part} meanings` : 'Decode: word-part meanings',
+      given: answerText(a.given),
+      expected: answerText(a.expected),
+    };
+  } else if (a.mode === 'forge') {
+    fields = { item: word, skill: FORGE_SKILL, given: joinParts(a.given), expected: joinParts(a.expected) };
+  }
+  const detail = {};
+  for (const [k, v] of Object.entries(fields)) if (v) detail[k] = v.slice(0, ANSWER_TEXT_MAX);
+  return detail;
+}
+
+/**
+ * Reports one graded attempt through `kit.answer` (it batches and queues itself, so nothing is
+ * tracked for the Home Room wait). A kit without `answer` (deployed before the portal's
+ * migration 0018) is skipped. Refused, like an award, when the signed-in account changed
+ * under this tab (`onMismatch`). Returns whether it was sent; never throws.
+ */
+export function reportAnswer(kit, correct, detail, { cookie = () => document.cookie, onMismatch = () => {} } = {}) {
+  try {
+    if (!kit || typeof kit.answer !== 'function') return false;
+    if (!sameAccount(kit, cookie())) {
+      onMismatch();
+      return false;
+    }
+    kit.answer(correct === true, detail);
+    return true;
+  } catch (err) {
+    console.warn('[kit] answer failed:', err && err.message ? err.message : err);
+    return false;
+  }
+}
+
+export const RESTART_TEXT ='The signed-in account changed. Reloading…';
 export const RESTART_LOSS_TEXT = 'The signed-in account changed. Reloading… Your unfinished word will not be kept.';
 export const RESTART_STALLED_TEXT = 'The signed-in account changed. Reload to keep playing.';
 

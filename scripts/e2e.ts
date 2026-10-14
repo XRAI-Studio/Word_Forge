@@ -157,10 +157,12 @@ async function gateInProductionMode() {
 // ---------------------------------------------------------------- part (b)
 
 type Award = { event: string; detail: Record<string, unknown> };
+type Answer = { correct: boolean; item?: string; skill?: string; given?: string; expected?: string };
 type SyncedState = { v: 2; correct: Record<string, number> };
 type Save = { state: SyncedState; summary: { headline: string; percent: number } };
 type Win = Window & {
   __kitAwards?: Award[];
+  __kitAnswers?: Answer[];
   __kitSaves?: Save[];
   __wfAward?: unknown;
   checkForge?: () => void;
@@ -181,6 +183,11 @@ declare let fcIdx: number;
 
 async function awards(page: Page): Promise<Award[]> {
   return page.evaluate(() => (window as unknown as Win).__kitAwards ?? []);
+}
+
+/** The graded attempts the mock kit recorded (`kit.answer`, the portal's answer log). */
+async function answers(page: Page): Promise<Answer[]> {
+  return page.evaluate(() => (window as unknown as Win).__kitAnswers ?? []);
 }
 
 /** Waits until the mock kit's most recent save carries `headline`; returns that save. */
@@ -733,6 +740,7 @@ async function gameInDevelopmentMode() {
     expectEq(third.state.v, 2, "tile save: the synced (v2) shape");
     expectEq(third.summary.percent, 6, "tile percent");
     log('dev: tile save "3 words forged · 1 of 18 stories"');
+    expectEq((await answers(page)).length, 0, "a story unlock is not a graded answer");
 
     // A correct forge: fill the picks from the current word, then check. `current` and
     // `forgePicks` are top-level `let` bindings of the classic script (global lexical
@@ -750,6 +758,13 @@ async function gameInDevelopmentMode() {
     expectEq(forged.length, 1, "word_forged after a correct forge");
     expectEq(forged[0].detail.word, expectedWord, "word_forged names the word");
     log(`dev: word_forged for "${expectedWord}"`);
+    let ans = await answers(page);
+    expectEq(ans.length, 1, "one graded answer after a correct forge");
+    expectEq(ans[0].correct, true, "the correct forge is reported correct");
+    expectEq(ans[0].item, expectedWord, "the forge answer's item is the word");
+    expectEq(ans[0].skill, "Forge: build words from parts", "the forge answer's skill");
+    expectEq(ans[0].given, ans[0].expected, "a correct forge gave the expected parts");
+    log(`dev: answer logged ${JSON.stringify(ans[0])}`);
     await lastSaveIs(page, "4 words forged · 1 of 18 stories");
     const kept = await page.evaluate(() => {
       const entries: Record<string, unknown> = {};
@@ -792,6 +807,49 @@ async function gameInDevelopmentMode() {
     for (const p of shown) expectEq(praiseList.includes(p), true, `praise "${p}" is from the list`);
     expectEq(shown[0] !== shown[1], true, `two correct Decode answers show different praise (${shown.join(" / ")})`);
     log(`dev: Decode praise "${shown[0]}", then "${shown[1]}"`);
+    ans = await answers(page);
+    expectEq(ans.length, 3, "two correct Decode answers are logged");
+    for (const x of ans.slice(1)) {
+      expectEq(x.correct, true, "a correct Decode answer is reported correct");
+      expectEq(/^Decode: (prefix|stem|suffix) meanings$/.test(x.skill ?? ""), true, `Decode skill "${x.skill}"`);
+      expectEq(x.given, x.expected, "a correct Decode answer gave the expected meaning");
+    }
+
+    // A wrong Decode answer is logged too, with what was chosen and what was right.
+    await page.locator(".choice").first().waitFor({ timeout: 10_000 });
+    const asked = await page.evaluate(() => {
+      const c = current as unknown as { w: string[]; ptype: string; pkey: string; correct: string };
+      return { word: c.w[0], ptype: c.ptype, pkey: c.pkey, correct: c.correct };
+    });
+    const wrongChoice = page.locator(".choice").filter({ hasNotText: new RegExp(`^${asked.correct.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`) }).first();
+    const given = ((await wrongChoice.textContent()) ?? "").trim();
+    await wrongChoice.click();
+    ans = await answers(page);
+    expectEq(ans.length, 4, "a wrong Decode answer is logged");
+    expectEq(JSON.stringify(ans[3]), JSON.stringify({
+      correct: false,
+      item: `${asked.word} · ${asked.ptype} ${asked.pkey}`,
+      skill: `Decode: ${asked.ptype} meanings`,
+      given,
+      expected: asked.correct,
+    }), "the wrong Decode answer's detail");
+    expectEq((await awards(page)).filter((x) => x.event === "word_forged").length, 3, "a wrong answer earns no XP");
+    log(`dev: wrong answer logged ${JSON.stringify(ans[3])}`);
+
+    // Ungraded actions log nothing: a second click on the answered card, the Forge's
+    // "fill every slot first" nudge, flipping a flashcard, browsing the lexicon and stories.
+    await page.evaluate(() => {
+      const w = window as unknown as Win & { answerDecode?: (b: Element, v: string) => void; flipCard?: () => void };
+      w.answerDecode!(document.querySelector(".choice")!, "again");
+      w.setMode!("forge");
+      w.checkForge!();
+      w.setMode!("cards");
+      w.flipCard!();
+      w.setMode!("lexicon");
+      w.setMode!("stories");
+    });
+    expectEq((await answers(page)).length, 4, "ungraded actions log no answer");
+    log("dev: re-clicks, the empty-slot nudge, flashcards, lexicon and stories log no answer");
 
     await homeRoomButton(page);
 

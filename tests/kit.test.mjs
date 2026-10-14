@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { accountChangeRestart, award, createPublisher, flushAwards, mergeSync, progressSummary, progressSync, storiesFor, syncState, syncSummary, syncTotal, RESTART_LOSS_TEXT, RESTART_STALLED_TEXT, RESTART_TEXT, initKit, isDevHost, mockKit, pendingAwardCount, sameAccount, sessionUserId, trackPending, GAME } from '../public/kit.js';
+import { readFile } from 'node:fs/promises';
+import { accountChangeRestart, answerDetail, ANSWER_TEXT_MAX, award, createPublisher, FORGE_SKILL, reportAnswer, flushAwards, mergeSync, progressSummary, progressSync, storiesFor, syncState, syncSummary, syncTotal, RESTART_LOSS_TEXT, RESTART_STALLED_TEXT, RESTART_TEXT, initKit, isDevHost, mockKit, pendingAwardCount, sameAccount, sessionUserId, trackPending, GAME } from '../public/kit.js';
 
 function jwt(sub) {
   const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
@@ -1121,4 +1122,117 @@ test('WF-CDS3-R201: with kits that are not versioned, two clients answering diff
   assert.equal(sent.correct['s.A'], 1);
   assert.equal(sent.correct['s.B'], 1);
   assert.equal(syncTotal(server.state), 7, 'legacy 5 plus both answers');
+});
+
+// ---- answer log (portal migration 0018) ----
+
+test('answerDetail: a Decode attempt names the word and the quizzed part, the skill is the part type', () => {
+  assert.deepEqual(answerDetail({ mode: 'decode', word: 'convert', part: 'prefix', key: 'con-', given: 'against', expected: 'with, together' }), {
+    item: 'convert · prefix con-',
+    skill: 'Decode: prefix meanings',
+    given: 'against',
+    expected: 'with, together',
+  });
+  assert.equal(answerDetail({ mode: 'decode', word: 'convert', part: 'stem', key: 'vert' }).skill, 'Decode: stem meanings');
+  assert.equal(answerDetail({ mode: 'decode', word: 'correction', part: 'suffix', key: '-ion' }).item, 'correction · suffix -ion');
+});
+
+test('answerDetail: a Forge attempt is the word, the picked and right parts joined', () => {
+  assert.deepEqual(answerDetail({ mode: 'forge', word: 'correction', given: ['con-', 'vert', '-ion'], expected: ['con-', 'rect', '-ion'] }), {
+    item: 'correction',
+    skill: FORGE_SKILL,
+    given: 'con- + vert + -ion',
+    expected: 'con- + rect + -ion',
+  });
+  // A word without a prefix or suffix has null in that slot; it is left out.
+  assert.deepEqual(answerDetail({ mode: 'forge', word: 'reform', given: ['re-', 'form', null], expected: ['re-', 'form', null] }), {
+    item: 'reform',
+    skill: FORGE_SKILL,
+    given: 're- + form',
+    expected: 're- + form',
+  });
+});
+
+test('answerDetail: empty fields are left out, long ones capped, junk gives an empty detail', () => {
+  assert.deepEqual(answerDetail({ mode: 'forge', word: 'x', given: [null, null, null], expected: 'nope' }), { item: 'x', skill: FORGE_SKILL });
+  const long = 'm'.repeat(500);
+  const d = answerDetail({ mode: 'decode', word: long, part: 'stem', key: 'vert', given: long, expected: long });
+  for (const k of ['item', 'skill', 'given', 'expected']) assert.ok(d[k].length <= ANSWER_TEXT_MAX, `${k} is capped`);
+  assert.deepEqual(answerDetail(undefined), {});
+  assert.deepEqual(answerDetail({ mode: 'lexicon', word: 'x' }), {});
+  assert.equal(answerDetail({ mode: 'decode', word: 'x', part: '__proto__', key: 'k' }).skill, 'Decode: word-part meanings');
+});
+
+test('reportAnswer: a correct attempt is sent with correct: true, a wrong one with correct: false', () => {
+  const sent = [];
+  const kit = { user: { id: 'user-1' }, answer: (c, d) => { sent.push([c, d]); } };
+  const opts = { cookie: () => cookieFor('user-1') };
+  const right = answerDetail({ mode: 'forge', word: 'convert', given: ['con-', 'vert', null], expected: ['con-', 'vert', null] });
+  const wrong = answerDetail({ mode: 'decode', word: 'convert', part: 'prefix', key: 'con-', given: 'against', expected: 'with, together' });
+  assert.equal(reportAnswer(kit, true, right, opts), true);
+  assert.equal(reportAnswer(kit, false, wrong, opts), true);
+  assert.deepEqual(sent, [
+    [true, { item: 'convert', skill: FORGE_SKILL, given: 'con- + vert', expected: 'con- + vert' }],
+    [false, { item: 'convert · prefix con-', skill: 'Decode: prefix meanings', given: 'against', expected: 'with, together' }],
+  ]);
+  assert.equal(pendingAwardCount(), 0, 'answers are not held for the Home Room wait');
+});
+
+test('reportAnswer: a kit without answer (older portal kit), no kit, or a throwing answer never breaks the lesson', () => {
+  const opts = { cookie: () => cookieFor('user-1'), onMismatch: () => assert.fail('no restart for a missing method') };
+  assert.equal(reportAnswer({ user: { id: 'user-1' }, award: async () => ({}) }, true, { item: 'x' }, opts), false);
+  assert.equal(reportAnswer(null, true, { item: 'x' }, opts), false);
+  assert.equal(reportAnswer(undefined, false, undefined, opts), false);
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    assert.equal(reportAnswer({ user: { id: 'user-1' }, answer: () => { throw new Error('boom'); } }, true, {}, opts), false);
+  } finally {
+    console.warn = warn;
+  }
+});
+
+test('reportAnswer: refused (and reported) when the signed-in account changed under the tab', () => {
+  const sent = [];
+  let mismatches = 0;
+  const kit = { user: { id: 'user-1' }, answer: (c, d) => { sent.push([c, d]); } };
+  assert.equal(reportAnswer(kit, true, { item: 'x' }, { cookie: () => cookieFor('user-2'), onMismatch: () => { mismatches++; } }), false);
+  assert.deepEqual(sent, []);
+  assert.equal(mismatches, 1);
+});
+
+test('mockKit records graded answers on window.__kitAnswers and returns nothing', () => {
+  const win = {};
+  const kit = mockKit(win);
+  assert.equal(kit.answer(true, { item: 'convert', skill: FORGE_SKILL }), undefined);
+  assert.equal(kit.answer(false), undefined);
+  assert.deepEqual(win.__kitAnswers, [{ correct: true, item: 'convert', skill: FORGE_SKILL }, { correct: false }]);
+  assert.equal(reportAnswer(kit, true, { item: 'reform' }, MOCK_OPTS), true);
+  assert.equal(win.__kitAnswers.length, 3);
+});
+
+test('the game reports exactly its two graded attempts (Decode answer, Forge check), right or wrong, after grading', async () => {
+  const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
+  const calls = [...html.matchAll(/window\.__wfAnswer\?\.\(ok,\{mode:"(\w+)"/g)].map((m) => m[1]);
+  assert.deepEqual(calls, ['decode', 'forge']);
+  // A function's source: up to its closing brace, or to the next function for a one-liner.
+  const body = (name) => {
+    const start = html.indexOf(`\nfunction ${name}(`);
+    assert.ok(start >= 0, `found ${name}`);
+    const ends = [html.indexOf('\n}\n', start), html.indexOf('\nfunction ', start + 1)].filter((i) => i > start);
+    return html.slice(start, Math.min(...ends));
+  };
+  for (const [fn, mode] of [['answerDecode', 'decode'], ['checkForge', 'forge']]) {
+    const b = body(fn);
+    const at = b.indexOf(`window.__wfAnswer?.(ok,{mode:"${mode}"`);
+    assert.ok(at > b.indexOf('markResult(ok);'), `${fn} reports after grading`);
+    assert.ok(at > b.indexOf('if(answered)return;'), `${fn} reports once per attempt (after the answered guard)`);
+    assert.ok(!b.slice(at - 40, at).includes('if(ok)'), `${fn} reports wrong attempts too`);
+  }
+  // checkForge's "fill every slot first" early return is not a graded attempt.
+  const forge = body('checkForge');
+  assert.ok(forge.indexOf('Snap a block into every empty slot first!') < forge.indexOf('window.__wfAnswer'), 'the empty-slot nudge returns before reporting');
+  for (const ungraded of ['renderLexicon', 'renderCards', 'flipCard', 'renderStories', 'maybeUnlockStory', 'pickTile', 'clearForge']) {
+    assert.ok(!body(ungraded).includes('__wfAnswer'), `${ungraded} reports nothing`);
+  }
 });

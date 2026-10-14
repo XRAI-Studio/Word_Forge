@@ -333,8 +333,8 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--focus);outline-
 </div>
 
 <!-- Portal kit (class standard rule 3): the kit script first, then a module that starts it
-     and installs window.__wfAward and window.__wfPublish for the game script below (the
-     module runs after it, so the game's window.__wfProgress hook exists by then). On
+     and installs window.__wfAward, window.__wfAnswer and window.__wfPublish for the game
+     script below (the module runs after it, so the game's window.__wfProgress hook exists by then). On
      localhost kit.js supplies a mock, so the game runs without a portal session.
      Local scripts carry ?v=<cache version> and are precached under exactly that URL (sw.js
      SHELL): the page is network-first but scripts are cache-first, so an older worker must
@@ -343,7 +343,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--focus);outline-
 <div id="kit-banner" style="display:none;position:fixed;left:0;right:0;top:0;z-index:9999;padding:10px 16px;background:#1b1b1b;color:#fff;font:600 15px system-ui,sans-serif;text-align:center"></div>
 <script src="https://class.travelschooling.com/kit/v1/ts-kit.js"></script>
 <script type="module">
-import { initKit, award, sameAccount, flushAwards, accountChangeRestart, progressSync, trackPending } from './kit.js?v=8';
+import { initKit, award, answerDetail, reportAnswer, sameAccount, flushAwards, accountChangeRestart, progressSync, trackPending } from './kit.js?v=9';
 // The Home Room button waits (bounded) for awards still in flight. Installed before the kit
 // starts so the button works whatever the kit's outcome.
 window.__wfFlushAwards = (timeoutMs) => flushAwards(timeoutMs);
@@ -389,6 +389,12 @@ if (start.kind === 'redirecting') {
     if (restarter.isRestarting()) return false;
     return award(kit, event, detail, { onMismatch: restart });
   };
+  // Answer log (portal migration 0018): the game reports every graded attempt, right or wrong,
+  // as { mode, word, ... }; kit.js turns it into the portal's { item, skill, given, expected }.
+  window.__wfAnswer = (correct, attempt) => {
+    if (restarter.isRestarting()) return false;
+    return reportAnswer(kit, correct, answerDetail(attempt), { onMismatch: restart });
+  };
   const check = () => { if (!sameAccount(kit, document.cookie)) restart(); };
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') check(); });
   window.addEventListener('focus', check);
@@ -406,8 +412,8 @@ if (start.kind === 'redirecting') {
 }
 await trackPending(startUp());
 </script>
-<script src="progress-store.js?v=8"></script>
-<script src="leave-guard.js?v=8"></script>
+<script src="progress-store.js?v=9"></script>
+<script src="leave-guard.js?v=9"></script>
 <script>
 /* ============ DATA ============ */
 const PREFIXES = [
@@ -1480,6 +1486,7 @@ function answerDecode(btn,val){
   if(answered)return;
   const ok = val===current.correct;
   markResult(ok);
+  window.__wfAnswer?.(ok,{mode:"decode",word:current.w[0],part:current.ptype,key:current.pkey,given:val,expected:current.correct});
   document.querySelectorAll(".choice").forEach(b=>{
     b.disabled=true;
     if(b.textContent===current.correct)b.classList.add("correct");
@@ -1566,6 +1573,7 @@ function checkForge(){
   }
   const ok = (!current.needPrefix||forgePicks.prefix===w[1])&&forgePicks.stem===w[2]&&(!current.needSuffix||forgePicks.suffix===w[3]);
   markResult(ok);
+  window.__wfAnswer?.(ok,{mode:"forge",word:w[0],given:[forgePicks.prefix,forgePicks.stem,forgePicks.suffix],expected:[w[1],w[2],w[3]]});
   syncLeaveGuard();
   if(ok){sndCorrect();celebrateAt($("stick"));window.__wfAward?.('word_forged',{word:w[0]});maybeUnlockStory();}else{sndWrong();}
   $("fb").className="feedback "+(ok?"good":"bad");

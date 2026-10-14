@@ -11,8 +11,9 @@ Rules:
 - `src/proxy.ts`, `src/lib/session.ts` and `src/lib/session-cookie.ts` are byte-identical
   to Factors' (the canonical copies); change them there first, then copy.
 - Kit hooks live only in `public/kit.js`, the module bootstrap in `index.html`, the
-  three `window.__wfAward?.(...)` calls and the Return to Home Room button's
-  `window.__wfFlushAwards` wait. Award only events present in the portal seed's
+  three `window.__wfAward?.(...)` calls, the two `window.__wfAnswer?.(...)` calls (one per
+  graded attempt, right or wrong: `answerDecode` and `checkForge`; the portal's answer log)
+  and the Return to Home Room button's `window.__wfFlushAwards` wait. Award only events present in the portal seed's
   `xp_events` for `wordforge` (`word_forged`, `story_unlocked`).
 - `public/progress-store.js` (saved-progress writer) and `public/leave-guard.js` (Return to
   Home Room guard) are plain helper scripts like `sw-policy.js`, each loaded with its own
